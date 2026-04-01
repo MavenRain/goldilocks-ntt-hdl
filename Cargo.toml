@@ -1,0 +1,20 @@
+[package]
+name = "goldilocks-ntt-hdl"
+version = "0.1.0"
+edition = "2024"
+description = "2^24-point NTT over the Goldilocks field: SDF pipeline in RustHDL with comp-cat-rs categorical structure"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/MavenRain/goldilocks-ntt-hdl"
+
+[dependencies]
+comp-cat-rs = "0.5"
+rust-hdl = "0.46"
+
+[dev-dependencies]
+proptest = "1"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+needless_pass_by_value = "warn"
+manual_map = "warn"
