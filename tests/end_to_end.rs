@@ -71,7 +71,7 @@ fn golden_model_round_trip_size_16() -> Result<(), Error> {
     use goldilocks_ntt_hdl::golden::reference::inverse_ntt;
 
     let input: Vec<GoldilocksElement> = (1..=16)
-        .map(|i| GoldilocksElement::new(i))
+        .map(GoldilocksElement::new)
         .collect();
 
     let forward = dif_ntt(&input)?;

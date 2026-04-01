@@ -24,7 +24,7 @@ use crate::field::roots::primitive_root_of_unity;
 /// use goldilocks_ntt_hdl::golden::reference::dif_ntt;
 ///
 /// let input: Vec<GoldilocksElement> = (1..=4)
-///     .map(|i| GoldilocksElement::new(i))
+///     .map(GoldilocksElement::new)
 ///     .collect();
 /// let ntt = dif_ntt(&input);
 /// assert!(ntt.is_ok());
@@ -98,7 +98,7 @@ fn dif_ntt_recursive(
 /// use goldilocks_ntt_hdl::golden::reference::{dif_ntt, inverse_ntt};
 ///
 /// let input: Vec<GoldilocksElement> = (1..=8)
-///     .map(|i| GoldilocksElement::new(i))
+///     .map(GoldilocksElement::new)
 ///     .collect();
 ///
 /// let forward = dif_ntt(&input).ok();
@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn ntt_inverse_round_trip_size_8() -> Result<(), Error> {
         let original: Vec<_> = (1..=8)
-            .map(|i| GoldilocksElement::new(i))
+            .map(GoldilocksElement::new)
             .collect();
 
         // Forward DIF NTT (bit-reversed output)

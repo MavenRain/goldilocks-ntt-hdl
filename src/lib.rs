@@ -35,7 +35,7 @@
 //! use goldilocks_ntt_hdl::golden::reference::{dif_ntt, inverse_ntt};
 //!
 //! let input: Vec<GoldilocksElement> = (1..=8)
-//!     .map(|i| GoldilocksElement::new(i))
+//!     .map(GoldilocksElement::new)
 //!     .collect();
 //!
 //! // Forward DIF NTT (output in bit-reversed order)

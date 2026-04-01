@@ -77,7 +77,7 @@ use goldilocks_ntt_hdl::golden::reference::{dif_ntt, inverse_ntt};
 
 // Forward NTT (output in bit-reversed order)
 let input: Vec<GoldilocksElement> = (1..=8)
-    .map(|i| GoldilocksElement::new(i))
+    .map(GoldilocksElement::new)
     .collect();
 let forward = dif_ntt(&input).ok();
 
@@ -112,7 +112,7 @@ use goldilocks_ntt_hdl::sim::runner::{SimConfig, simulate_pipeline};
 
 // Behavioral simulation with deferred execution
 let input: Vec<GoldilocksElement> = (0..16)
-    .map(|i| GoldilocksElement::new(i))
+    .map(GoldilocksElement::new)
     .collect();
 let config = SimConfig::new(input, 4).ok();
 
@@ -142,19 +142,52 @@ cargo doc --no-deps --open
 
 ## Testing
 
-61 tests across three levels:
+68 tests across three levels:
 
 - **Unit tests** (56): field axioms, root of unity properties, graph
   structure, descriptor composition, interpretation correctness,
   pipeline construction.
 - **Integration tests** (4): golden model round-trip, passthrough
   preservation, output length matching.
-- **Doctests** (1): `GoldilocksElement` arithmetic.
+- **Doctests** (8): `GoldilocksElement`, roots, NTT forward/inverse,
+  graph path, categorical interpretation, simulation.
 
 ```sh
 cargo test          # all unit + integration tests
 cargo test --doc    # doctests
 ```
+
+## Benchmarks
+
+2^24-point Goldilocks NTT benchmarks comparing CPU implementations
+against projected FPGA and published GPU numbers.
+
+```sh
+cargo bench
+```
+
+This runs two benchmarks via `criterion`:
+
+- **`golden_dif_ntt_2^24`**: Pure recursive DIF NTT (CPU, single-threaded)
+- **`behavioral_sdf_sim_2^24`**: Behavioral SDF pipeline simulation (CPU)
+
+### Reference comparison
+
+| Platform                       | 2^24 Goldilocks NTT | Notes                         |
+|--------------------------------|---------------------|-------------------------------|
+| CPU golden model               | (run `cargo bench`) | recursive DIF, single-thread  |
+| CPU behavioral SDF sim         | (run `cargo bench`) | 24-stage streaming simulation |
+| FPGA SDF @ 200 MHz (projected) | ~84 ms              | 2^24 cycles / 200 MHz         |
+| FPGA SDF @ 400 MHz (projected) | ~42 ms              | 2^24 cycles / 400 MHz         |
+| RTX 4090 (ICICLE)              | ~3-5 ms             | Ingonyama published numbers   |
+
+FPGA projections assume 1 element per cycle throughput from the fully
+pipelined SDF architecture.  Actual numbers depend on synthesis results
+and target device (delay line memory, DSP utilization, clock closure).
+
+The RTX 4090 number is the current ceiling; a future `cuda` feature
+flag integrating the `icicle` crate would enable direct comparison
+on the same machine.
 
 ## License
 
