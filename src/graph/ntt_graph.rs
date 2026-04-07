@@ -4,7 +4,7 @@
 //! 25 vertices (stage boundaries) and 24 edges (stages).  The
 //! [`comp_cat_rs::collapse::free_category`] infrastructure gives us
 //! path composition and the universal property for interpreting this
-//! graph into concrete `RustHDL` modules.
+//! graph into concrete `hdl-cat` modules.
 
 use comp_cat_rs::collapse::free_category::{Edge, FreeCategoryError, Graph, Path, Vertex};
 

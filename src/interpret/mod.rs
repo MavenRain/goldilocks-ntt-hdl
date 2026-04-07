@@ -1,7 +1,7 @@
 //! Interpretation layer: maps the NTT graph into HDL module descriptors.
 //!
 //! This is the bridge between the categorical graph structure and
-//! concrete `RustHDL` modules, using [`comp_cat_rs::collapse::free_category::GraphMorphism`].
+//! concrete `hdl-cat` modules, using [`comp_cat_rs::collapse::free_category::GraphMorphism`].
 
 pub mod descriptor;
 pub mod hdl_morphism;

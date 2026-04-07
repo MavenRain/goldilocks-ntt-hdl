@@ -2,7 +2,7 @@
 
 A 2^24-point Number Theoretic Transform over the Goldilocks field
 (p = 2^64 - 2^32 + 1), implemented as a fully pipelined SDF
-(Single-path Delay Feedback) architecture in `RustHDL`, with
+(Single-path Delay Feedback) architecture in `hdl-cat`, with
 compositional pipeline assembly driven by `comp-cat-rs`.
 
 ## Overview
@@ -18,10 +18,10 @@ This crate provides:
   a free category graph (`comp_cat_rs::collapse::free_category`).
   Each stage is an edge; the `interpret()` universal property composes
   them into a single pipeline descriptor.
-- **`RustHDL` modules**: `LogicBlock` implementations for modular
+- **`hdl-cat` modules**: `CircuitArrow` and `Sync` machines for modular
   arithmetic (adder, subtractor, 7-cycle pipelined multiplier), DIF
   butterfly, on-the-fly twiddle accumulator, parameterized delay line,
-  SDF stage, and the full 24-stage pipeline.
+  SDF stage, and Verilog emission via `emit_sync_graph`.
 - **`Io`-wrapped simulation**: Behavioral SDF simulation with all
   side effects deferred inside `comp_cat_rs::effect::io::Io::suspend`.
 
@@ -47,12 +47,12 @@ interpret/
 ```
 
 **Layer 1** is pure: zero `mut`, combinators only, comp-cat-rs effects.
-**Layer 2** quarantines `mut` inside `RustHDL`'s `Logic::update` methods
-and `Io::suspend` closures at the simulation boundary.
+**Layer 2** quarantines `mut` inside `Io::suspend` closures at the
+simulation boundary.
 
 The bridge between layers is the `interpret()` universal property of the
 free category: it maps the abstract graph into concrete HDL stage
-descriptors, which Layer 2 materializes into `RustHDL` modules.
+descriptors, which Layer 2 materializes into `hdl-cat` `Sync` machines.
 
 ## SDF Pipeline
 

@@ -1,219 +1,373 @@
-//! Full 24-stage NTT pipeline.
+//! SDF pipeline compositions of [`crate::hdl::stage::sdf_stage`]s.
 //!
-//! Composes 24 [`SdfStage`] instances into a single streaming
-//! pipeline.  Data enters at stage 0 and exits after stage 23.
-//! Each stage has its own delay depth and twiddle root, computed
-//! from the [`HdlInterpretation`](crate::interpret::hdl_morphism::HdlInterpretation).
+//! Each pipeline variant is a concrete composition of a small number of
+//! SDF stages whose depths multiply to the NTT size.  For a radix-2 DIF
+//! pipeline of size `N = 2^k`, stage `j` (for `j = 0..k`) has delay depth
+//! `D_j = 2^(k - 1 - j)`.
+//!
+//! The step root for each stage is supplied via the pipeline's input bundle
+//! rather than baked into the hardware struct, so the same pipeline can be
+//! reused for both forward and inverse NTTs with an appropriate choice of
+//! primitive roots.
+//!
+//! This module exposes a [`size_4_pipeline`] constructor (2 stages, depths
+//! 2 and 1) composed by merging the underlying IR graphs with appropriate
+//! wire remapping.
 
-use rust_hdl::prelude::*;
+use comp_cat_rs::effect::io::Io;
+use hdl_cat_bits::Bits;
+use hdl_cat_circuit::{CircuitTensor, Obj};
+use hdl_cat_error::Error;
+use hdl_cat_ir::{HdlGraph, HdlGraphBuilder, WireId};
+use hdl_cat_sync::Sync;
 
-use crate::error::Error;
-use crate::hdl::common::{u64_to_bits, GOLDILOCKS_WIDTH};
-use crate::hdl::stage::SdfStage;
-use crate::field::roots::primitive_root_of_unity;
-use crate::graph::ntt_graph::NTT_STAGES;
+use crate::hdl::stage::sdf_stage;
 
-/// The full 24-stage SDF NTT pipeline.
+/// Type alias for 64-bit Goldilocks field element.
+pub type GoldilocksElement = Bits<64>;
+
+/// Input bundle for size-4 pipeline: `(((data, valid), step_root_0), step_root_1)`.
+pub type Size4PipelineInput = CircuitTensor<
+    CircuitTensor<
+        CircuitTensor<Obj<GoldilocksElement>, Obj<bool>>,
+        Obj<GoldilocksElement>,
+    >,
+    Obj<GoldilocksElement>,
+>;
+
+/// Output bundle for size-4 pipeline: `(data, valid)`.
+pub type Size4PipelineOutput = CircuitTensor<Obj<GoldilocksElement>, Obj<bool>>;
+
+/// Phantom state marker for the pipeline.
+pub type Size4PipelineState = Obj<GoldilocksElement>;
+
+/// A size-4 SDF pipeline as a sync machine.
+pub type Size4PipelineSync = Sync<Size4PipelineState, Size4PipelineInput, Size4PipelineOutput>;
+
+/// Merge two [`HdlGraph`]s, remapping the second graph's wire references.
 ///
-/// Constructed via [`NttPipeline::build`], which computes the
-/// correct delay depth and twiddle root for each stage.
-#[derive(Clone, Debug, Default)]
-pub struct NttPipeline {
-    /// Clock input.
-    pub clock: Signal<In, Clock>,
-    /// Streaming data input.
-    pub data_in: Signal<In, Bits<GOLDILOCKS_WIDTH>>,
-    /// Input valid strobe.
-    pub valid_in: Signal<In, Bit>,
-    /// Streaming data output.
-    pub data_out: Signal<Out, Bits<GOLDILOCKS_WIDTH>>,
-    /// Output valid strobe.
-    pub valid_out: Signal<Out, Bit>,
-    stages: Vec<SdfStage>,
-}
+/// Replicates the internal `merge_graphs` from `hdl-cat-sync` so that
+/// we can perform partial composition (where only some of `g`'s data
+/// inputs are substituted).
+fn merge_graphs(
+    f_graph: &HdlGraph,
+    g_graph: &HdlGraph,
+    remap_g: impl Fn(WireId) -> WireId + Clone,
+) -> HdlGraph {
+    // Allocate wires from both graphs
+    let bld = f_graph.wires().iter().cloned()
+        .chain(g_graph.wires().iter().cloned())
+        .fold(HdlGraphBuilder::new(), |b, ty| b.with_wire(ty).0);
 
-impl NttPipeline {
-    /// Build the 24-stage pipeline with correct parameters.
-    ///
-    /// Stage k gets delay depth 2^(23-k) and the primitive
-    /// 2^(24-k)-th root of unity as its twiddle step root.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if root of unity computation fails.
-    pub fn build() -> Result<Self, Error> {
-        let stages = (0..NTT_STAGES)
-            .map(|k| {
-                let delay_depth = 1_usize << (23 - k);
-                let order_bits = u32::try_from(NTT_STAGES - k)
-                    .map_err(|e| Error::Field(e.to_string()))?;
-                let step_root = primitive_root_of_unity(order_bits)?;
-                Ok(SdfStage::new(delay_depth, step_root))
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
+    // Copy f's instructions as-is
+    let bld = f_graph.instructions().iter().try_fold(bld, |b, instr| {
+        b.with_instruction(instr.op().clone(), instr.inputs().to_vec(), instr.output())
+    });
 
-        Ok(Self {
-            clock: Signal::default(),
-            data_in: Signal::default(),
-            valid_in: Signal::default(),
-            data_out: Signal::default(),
-            valid_out: Signal::default(),
-            stages,
-        })
-    }
-
-    /// Build a pipeline with only the first `n` stages (for testing).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `n > 24` or root computation fails.
-    pub fn build_partial(n: usize) -> Result<Self, Error> {
-        if n > NTT_STAGES {
-            Err(Error::Field(format!(
-                "requested {n} stages but maximum is {NTT_STAGES}"
-            )))
-        } else {
-            let stages = (0..n)
-                .map(|k| {
-                    let delay_depth = 1_usize << (23 - k);
-                    let order_bits = u32::try_from(NTT_STAGES - k)
-                        .map_err(|e| Error::Field(e.to_string()))?;
-                    let step_root = primitive_root_of_unity(order_bits)?;
-                    Ok(SdfStage::new(delay_depth, step_root))
-                })
-                .collect::<Result<Vec<_>, Error>>()?;
-
-            Ok(Self {
-                clock: Signal::default(),
-                data_in: Signal::default(),
-                valid_in: Signal::default(),
-                data_out: Signal::default(),
-                valid_out: Signal::default(),
-                stages,
-            })
-        }
-    }
-
-    /// Number of stages in this pipeline.
-    #[must_use]
-    pub fn stage_count(&self) -> usize {
-        self.stages.len()
-    }
-}
-
-impl Logic for NttPipeline {
-    fn update(&mut self) {
-        // Chain stages: output of stage k feeds input of stage k+1.
-        // Stage 0 reads from pipeline input.
-        // Last stage drives pipeline output.
-        let n = self.stages.len();
-
-        if n == 0 {
-            // Pass-through when no stages
-            self.data_out.next = self.data_in.val();
-            self.valid_out.next = self.valid_in.val();
-        } else {
-            // Feed first stage from pipeline input
-            if let Some(first) = self.stages.first_mut() {
-                first.clock.next = self.clock.val();
-                first.data_in.next = self.data_in.val();
-                first.valid_in.next = self.valid_in.val();
-            }
-
-            // Chain intermediate stages
-            // We need to read output of stage k and feed to stage k+1.
-            // Collect intermediate values first to satisfy borrow checker.
-            let intermediates: Vec<_> = self.stages.iter()
-                .map(|s| (s.data_out.val(), s.valid_out.val()))
+    // Copy g's instructions with wire remapping
+    let bld = bld.and_then(|b| {
+        g_graph.instructions().iter().try_fold(b, |b, instr| {
+            let new_inputs: Vec<WireId> = instr.inputs().iter()
+                .copied()
+                .map(remap_g.clone())
                 .collect();
+            let new_output = remap_g(instr.output());
+            b.with_instruction(instr.op().clone(), new_inputs, new_output)
+        })
+    });
 
-            (1..n).for_each(|k| {
-                if let (Some(stage), Some((data, valid))) =
-                    (self.stages.get_mut(k), intermediates.get(k - 1))
-                {
-                    stage.clock.next = self.clock.val();
-                    stage.data_in.next = *data;
-                    stage.valid_in.next = *valid;
-                }
-            });
-
-            // Drive pipeline output from last stage
-            if let Some((data, valid)) = intermediates.last() {
-                self.data_out.next = *data;
-                self.valid_out.next = *valid;
-            } else {
-                self.data_out.next = u64_to_bits(0);
-                self.valid_out.next = false;
-            }
-        }
-    }
-
-    fn connect(&mut self) {
-        self.data_out.connect();
-        self.valid_out.connect();
-    }
-
-    fn hdl(&self) -> Verilog {
-        Verilog::Empty
-    }
+    bld.map_or_else(|_| HdlGraphBuilder::new().build(), HdlGraphBuilder::build)
 }
 
-impl Block for NttPipeline {
-    fn connect_all(&mut self) {
-        self.stages.iter_mut().for_each(SdfStage::connect_all);
-        self.connect();
-    }
+/// Construct a size-4 SDF pipeline.
+///
+/// Composes two SDF stages with depths 2 and 1 to create a 4-point NTT
+/// pipeline.  Stage 0 (depth 2) feeds stage 1 (depth 1); each stage
+/// receives its own step root from the pipeline's input bundle.
+///
+/// The composition merges the two stages' IR graphs at the wire level:
+/// stage 1's `data_in` and `valid_in` are substituted with stage 0's
+/// `data_out` and `valid_out`, while `step_root_1` remains a
+/// pipeline-level input.
+///
+/// # Errors
+///
+/// Returns [`Error`] if stage construction fails.
+#[allow(clippy::similar_names)]
+pub fn size_4_pipeline() -> Result<Size4PipelineSync, Error> {
+    let stage_0 = sdf_stage(2)?;
+    let stage_1 = sdf_stage(1)?;
 
-    fn update_all(&mut self) {
-        self.update();
-        self.stages.iter_mut().for_each(SdfStage::update_all);
-    }
+    let (f_graph, f_inputs, f_outputs, f_init, f_sc) = stage_0.into_parts();
+    let (g_graph, g_inputs, g_outputs, g_init, g_sc) = stage_1.into_parts();
 
-    fn has_changed(&self) -> bool {
-        self.data_out.changed()
-            || self.valid_out.changed()
-            || self.stages.iter().any(SdfStage::has_changed)
-    }
+    let f_wire_count = f_graph.wires().len();
 
-    fn accept(&self, name: &str, probe: &mut dyn Probe) {
-        probe.visit_start_scope(name, self);
-        probe.visit_atom("data_out", &self.data_out);
-        probe.visit_atom("valid_out", &self.valid_out);
-        self.stages.iter().enumerate().for_each(|(i, s)| {
-            let stage_name = format!("stage_{i}");
-            s.accept(&stage_name, probe);
-        });
-        probe.visit_end_scope(name, self);
-    }
+    // Split into state and data portions
+    let (state_f_in, data_f_in) = f_inputs.split_at(f_sc);
+    let (state_f_out, data_f_out) = f_outputs.split_at(f_sc);
+    let (state_g_in, data_g_in) = g_inputs.split_at(g_sc);
+    let (state_g_out, data_g_out) = g_outputs.split_at(g_sc);
+
+    // data_f_out = [data_out, valid_out]
+    // data_g_in  = [data_in, valid_in, step_root]
+    //
+    // Substitute: data_g_in[0] -> data_f_out[0]  (data flow)
+    //             data_g_in[1] -> data_f_out[1]  (valid flow)
+    // Keep:       data_g_in[2] as pipeline input  (step_root_1)
+    let shift = |w: WireId| WireId::new(w.index() + f_wire_count);
+
+    let substitution: Vec<(WireId, WireId)> = data_g_in[..2].iter()
+        .zip(data_f_out.iter())
+        .map(|(g_w, f_w)| (shift(*g_w), *f_w))
+        .collect();
+
+    let remap_g = move |w: WireId| -> WireId {
+        let shifted = WireId::new(w.index() + f_wire_count);
+        substitution.iter()
+            .find_map(|(from, to)| (*from == shifted).then_some(*to))
+            .unwrap_or(shifted)
+    };
+
+    let merged = merge_graphs(&f_graph, &g_graph, remap_g);
+
+    // Pipeline inputs: state_0 ++ state_1 ++ data_in,valid,root_0 ++ root_1
+    let pipeline_inputs: Vec<WireId> = state_f_in.iter().copied()
+        .chain(state_g_in.iter().copied().map(shift))
+        .chain(data_f_in.iter().copied())
+        .chain(data_g_in[2..].iter().copied().map(shift))
+        .collect();
+
+    // Pipeline outputs: next_state_0 ++ next_state_1 ++ stage_1 data_out
+    let pipeline_outputs: Vec<WireId> = state_f_out.iter().copied()
+        .chain(state_g_out.iter().copied().map(shift))
+        .chain(data_g_out.iter().copied().map(shift))
+        .collect();
+
+    let combined_state = f_init.concat(g_init);
+    let combined_sc = f_sc + g_sc;
+
+    Ok(hdl_cat_sync::machine::from_raw(
+        merged, pipeline_inputs, pipeline_outputs, combined_state, combined_sc,
+    ))
+}
+
+/// Emit the size-4 pipeline to Verilog.
+///
+/// Produces a stateful Verilog module with `clk` and `rst` ports,
+/// using [`hdl_cat_verilog::emit_sync_graph`] to handle the pipeline's
+/// internal state registers.
+///
+/// # Errors
+///
+/// Returns [`Error`] if pipeline construction fails.
+pub fn emit_size_4_pipeline_verilog() -> Result<Io<hdl_cat_error::Error, String>, Error> {
+    let pipeline = size_4_pipeline()?;
+    let (graph, input_wires, output_wires, initial_state, state_wire_count) =
+        pipeline.into_parts();
+
+    let module = hdl_cat_verilog::emit_sync_graph(
+        &graph,
+        "size_4_ntt_pipeline",
+        state_wire_count,
+        &input_wires,
+        &output_wires,
+        &initial_state,
+    );
+
+    Ok(module.flat_map(|m| m.render()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hdl::common::{bitseq_to_u64, u64_to_bitseq, GOLDILOCKS_PRIME_U64};
+    use hdl_cat_kind::BitSeq;
+    use hdl_cat_sim::Testbench;
+
+    /// Pack a pipeline input cycle into a [`BitSeq`].
+    fn make_input(data: u64, valid: bool, step_root_0: u64, step_root_1: u64) -> BitSeq {
+        u64_to_bitseq(data)
+            .concat(BitSeq::from_vec(vec![valid]))
+            .concat(u64_to_bitseq(step_root_0))
+            .concat(u64_to_bitseq(step_root_1))
+    }
+
+    /// Unpack a pipeline output cycle from a [`BitSeq`].
+    fn read_output(bits: &BitSeq) -> Result<(u64, bool), Error> {
+        let (data_bits, valid_bits) = bits.clone().split_at(64);
+        let data = bitseq_to_u64(&data_bits)?;
+        let valid = valid_bits.bit(0);
+        Ok((data, valid))
+    }
+
+    // ── Software reference: two-stage SDF pipeline ───────────────────
+
+    struct RefStage {
+        delay: Vec<u64>,
+        twiddle: u64,
+        counter: usize,
+        depth: usize,
+    }
+
+    impl RefStage {
+        fn new(depth: usize) -> Self {
+            Self { delay: vec![0; depth], twiddle: 1, counter: 0, depth }
+        }
+
+        fn step(self, data_in: u64, step_root: u64) -> (Self, u64) {
+            let p = u128::from(GOLDILOCKS_PRIME_U64);
+            let is_butterfly = self.counter >= self.depth;
+            let delayed = self.delay[self.depth - 1];
+
+            let (data_out, delay_in, next_tw) = if is_butterfly {
+                let upper = u64::try_from(
+                    (u128::from(delayed) + u128::from(data_in)) % p,
+                ).unwrap_or(0);
+                let diff = (u128::from(delayed) + p - u128::from(data_in)) % p;
+                let lower = u64::try_from(
+                    (diff * u128::from(self.twiddle)) % p,
+                ).unwrap_or(0);
+                let tw = u64::try_from(
+                    (u128::from(self.twiddle) * u128::from(step_root)) % p,
+                ).unwrap_or(0);
+                (lower, upper, tw)
+            } else {
+                (data_in, data_in, 1)
+            };
+
+            let next_delay: Vec<u64> = core::iter::once(delay_in)
+                .chain(self.delay[..self.depth - 1].iter().copied())
+                .collect();
+
+            let next_counter = if self.counter == 2 * self.depth - 1 {
+                0
+            } else {
+                self.counter + 1
+            };
+
+            (RefStage {
+                delay: next_delay,
+                twiddle: next_tw,
+                counter: next_counter,
+                depth: self.depth,
+            }, data_out)
+        }
+    }
+
+    fn ref_pipeline_step(
+        s0: RefStage, s1: RefStage,
+        data_in: u64, step_root_0: u64, step_root_1: u64,
+    ) -> (RefStage, RefStage, u64) {
+        let (s0, mid) = s0.step(data_in, step_root_0);
+        let (s1, out) = s1.step(mid, step_root_1);
+        (s0, s1, out)
+    }
+
+    // ── Tests ────────────────────────────────────────────────────────
 
     #[test]
-    fn build_full_pipeline() -> Result<(), Error> {
-        let pipeline = NttPipeline::build()?;
-        assert_eq!(pipeline.stage_count(), 24);
+    fn size_4_pipeline_builds() -> Result<(), Error> {
+        let _pipeline = size_4_pipeline()?;
         Ok(())
     }
 
     #[test]
-    fn build_partial_pipeline() -> Result<(), Error> {
-        let pipeline = NttPipeline::build_partial(4)?;
-        assert_eq!(pipeline.stage_count(), 4);
+    fn pipeline_matches_reference() -> Result<(), Error> {
+        let pipeline = size_4_pipeline()?;
+        let step_root_0 = 1_u64;
+        let step_root_1 = 1_u64;
+
+        let data: Vec<u64> = vec![1, 2, 3, 4, 5, 6, 7, 8];
+
+        let inputs: Vec<BitSeq> = data.iter()
+            .map(|d| make_input(*d, true, step_root_0, step_root_1))
+            .collect();
+
+        let tb = Testbench::new(pipeline);
+        let results = tb.run(inputs).run()?;
+
+        // Run the software reference
+        let (_, ref_outputs) = data.iter().fold(
+            ((RefStage::new(2), RefStage::new(1)), Vec::new()),
+            |((s0, s1), outs), d| {
+                let (s0, s1, out) = ref_pipeline_step(s0, s1, *d, step_root_0, step_root_1);
+                ((s0, s1), outs.into_iter().chain(core::iter::once(out)).collect())
+            },
+        );
+
+        results.iter().zip(ref_outputs.iter()).enumerate().try_for_each(
+            |(i, (sample, expected))| {
+                let (actual, _) = read_output(sample.value())?;
+                assert_eq!(
+                    actual, *expected,
+                    "cycle {i}: got {actual:#018x}, expected {expected:#018x}",
+                );
+                Ok::<(), Error>(())
+            },
+        )?;
+
         Ok(())
     }
 
     #[test]
-    fn build_zero_stages() -> Result<(), Error> {
-        let pipeline = NttPipeline::build_partial(0)?;
-        assert_eq!(pipeline.stage_count(), 0);
+    fn pipeline_nontrivial_roots() -> Result<(), Error> {
+        use crate::field::roots::primitive_root_of_unity;
+
+        let pipeline = size_4_pipeline()?;
+
+        let step_root_0 = primitive_root_of_unity(2)
+            .map_err(|_| Error::WidthMismatch {
+                expected: hdl_cat_error::Width::new(64),
+                actual: hdl_cat_error::Width::new(0),
+            })?
+            .value();
+        let step_root_1 = primitive_root_of_unity(1)
+            .map_err(|_| Error::WidthMismatch {
+                expected: hdl_cat_error::Width::new(64),
+                actual: hdl_cat_error::Width::new(0),
+            })?
+            .value();
+
+        let data: Vec<u64> = vec![1, 2, 3, 4];
+
+        let inputs: Vec<BitSeq> = data.iter()
+            .map(|d| make_input(*d, true, step_root_0, step_root_1))
+            .collect();
+
+        let tb = Testbench::new(pipeline);
+        let results = tb.run(inputs).run()?;
+
+        let (_, ref_outputs) = data.iter().fold(
+            ((RefStage::new(2), RefStage::new(1)), Vec::new()),
+            |((s0, s1), outs), d| {
+                let (s0, s1, out) = ref_pipeline_step(s0, s1, *d, step_root_0, step_root_1);
+                ((s0, s1), outs.into_iter().chain(core::iter::once(out)).collect())
+            },
+        );
+
+        results.iter().zip(ref_outputs.iter()).enumerate().try_for_each(
+            |(i, (sample, expected))| {
+                let (actual, _) = read_output(sample.value())?;
+                assert_eq!(
+                    actual, *expected,
+                    "cycle {i}: got {actual:#018x}, expected {expected:#018x}",
+                );
+                Ok::<(), Error>(())
+            },
+        )?;
+
         Ok(())
     }
 
     #[test]
-    fn build_too_many_stages_is_error() {
-        assert!(NttPipeline::build_partial(25).is_err());
+    fn verilog_emission_produces_text() -> Result<(), crate::error::Error> {
+        let verilog_io = emit_size_4_pipeline_verilog()?;
+        let text = verilog_io
+            .run()
+            .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
+        assert!(text.contains("module"));
+        assert!(text.contains("size_4_ntt_pipeline"));
+        Ok(())
     }
 }

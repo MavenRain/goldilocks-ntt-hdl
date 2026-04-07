@@ -2,23 +2,23 @@
 //!
 //! A 2^24-point Number Theoretic Transform over the Goldilocks field
 //! (p = 2^64 - 2^32 + 1), implemented as a fully pipelined SDF
-//! (Single-path Delay Feedback) architecture in `RustHDL`.
+//! (Single-path Delay Feedback) architecture in `hdl-cat`.
 //!
 //! ## Two-Layer Architecture
 //!
 //! ```text
 //! Layer 1 (Pure)                    Layer 2 (HDL)
 //! --------------------              --------------------
-//! field/   element, roots           hdl/arithmetic/  add, sub, mul
-//! golden/  recursive DIF NTT        hdl/  butterfly, twiddle, delay
-//! graph/   NttGraph (25V, 24E)      hdl/  stage, pipeline
-//! interpret/  GraphMorphism          sim/  Io-wrapped behavioral sim
+//! field/   element, roots           hdl/arithmetic/  add, sub, mul (CircuitArrow)
+//! golden/  recursive DIF NTT        hdl/  butterfly, twiddle (Sync)
+//! graph/   NttGraph (25V, 24E)      hdl/  stage, pipeline (compose_sync)
+//! interpret/  GraphMorphism          sim/  Testbench behavioral sim
 //! ```
 //!
 //! **Layer 1** is pure: zero `mut`, combinators only, `comp-cat-rs`
-//! effects.  **Layer 2** quarantines `mut` inside `RustHDL`'s
-//! `Logic::update` methods and [`Io::suspend`](comp_cat_rs::effect::io::Io::suspend)
-//! closures.
+//! effects.  **Layer 2** quarantines hardware state management inside
+//! hdl-cat's `Sync` machines and simulation via
+//! [`Io::suspend`](comp_cat_rs::effect::io::Io::suspend) closures.
 //!
 //! ## Categorical Composition
 //!

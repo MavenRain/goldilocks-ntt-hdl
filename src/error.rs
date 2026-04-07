@@ -17,6 +17,9 @@ pub enum Error {
     /// Verilog generation error.
     VerilogGen(String),
 
+    /// hdl-cat compilation or descriptor error.
+    HdlCat(String),
+
     /// Verification mismatch between golden model and HDL simulation.
     VerificationMismatch {
         /// The pipeline stage where the mismatch occurred.
@@ -40,6 +43,7 @@ impl std::fmt::Display for Error {
             Self::Graph(e) => write!(f, "graph error: {e}"),
             Self::Simulation(msg) => write!(f, "simulation error: {msg}"),
             Self::VerilogGen(msg) => write!(f, "verilog generation error: {msg}"),
+            Self::HdlCat(msg) => write!(f, "hdl-cat error: {msg}"),
             Self::VerificationMismatch {
                 stage,
                 expected,
@@ -63,6 +67,7 @@ impl std::error::Error for Error {
             Self::Field(_)
             | Self::Simulation(_)
             | Self::VerilogGen(_)
+            | Self::HdlCat(_)
             | Self::VerificationMismatch { .. } => None,
         }
     }
@@ -77,5 +82,11 @@ impl From<std::io::Error> for Error {
 impl From<FreeCategoryError> for Error {
     fn from(e: FreeCategoryError) -> Self {
         Self::Graph(e)
+    }
+}
+
+impl From<hdl_cat_error::Error> for Error {
+    fn from(e: hdl_cat_error::Error) -> Self {
+        Self::HdlCat(e.to_string())
     }
 }

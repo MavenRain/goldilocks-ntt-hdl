@@ -1,8 +1,12 @@
-//! `RustHDL` hardware description modules for the NTT pipeline.
+//! hdl-cat hardware description modules for the NTT pipeline.
 //!
-//! The `mut` keyword is quarantined to this module: it appears only
-//! inside `#[hdl_gen]` blocks (required by `RustHDL`'s `Logic` trait)
-//! and inside `Io::suspend` closures at the simulation boundary.
+//! This module contains the hdl-cat hardware layer built from categorical
+//! circuit abstractions.  All components are constructed via
+//! [`hdl_cat_ir::HdlGraphBuilder`] and composed using categorical operations
+//! like [`hdl_cat_sync::compose_sync`] for sequential composition.
+//!
+//! State management is handled through hdl-cat's `Sync<S, I, O>` machines,
+//! which are pure from the outside but maintain internal state across cycles.
 //!
 //! All domain logic (field arithmetic, graph structure, interpretation)
 //! remains in the pure categorical layer outside this module.
@@ -11,6 +15,20 @@ pub mod arithmetic;
 pub mod butterfly;
 pub mod common;
 pub mod delay;
+pub mod goldilocks_reduce;
 pub mod pipeline;
 pub mod stage;
 pub mod twiddle;
+
+// Re-export key types and functions
+pub use arithmetic::{
+    goldilocks_add_comb, goldilocks_sub_comb, goldilocks_mul_comb,
+    GoldilocksAddArrow, GoldilocksSubArrow, GoldilocksMulArrow,
+};
+pub use butterfly::{dif_butterfly, DifButterflySync, BUTTERFLY_LATENCY};
+pub use common::{GoldilocksElement, GOLDILOCKS_PRIME_U64, u64_to_bitseq, bitseq_to_u64};
+pub use delay::{delay_n, goldilocks_delay_7};
+pub use goldilocks_reduce::{goldilocks_reduce_arrow, goldilocks_mul_reduce_arrow};
+pub use pipeline::{size_4_pipeline, emit_size_4_pipeline_verilog};
+pub use stage::{sdf_stage, sdf_stage_depth_1, sdf_stage_depth_2};
+pub use twiddle::twiddle_accumulator;
