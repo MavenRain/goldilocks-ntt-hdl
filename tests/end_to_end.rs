@@ -158,6 +158,57 @@ fn bram_verilog_emission_size_8() -> Result<(), Error> {
     Ok(())
 }
 
+/// 10-stage pipeline (2^10 = 1024-point NTT).
+///
+/// Depths: [512, 256, 128, 64, 32, 16, 8, 4, 2, 1].
+/// Stages 0-4 (depths 512..33) use circular buffer.
+/// Stages 5-9 (depths 32..1) use shift register.
+///
+/// NOTE: The full 24-stage (2^24-point) pipeline is blocked on
+/// array-typed wires in hdl-cat-ir.  The current IR allocates one
+/// wire per delay element, making `sdf_stage(2^23)` infeasible
+/// (~8M wire allocations).  Once the IR supports a single
+/// array-typed wire for a delay line, this test can scale to 24
+/// stages.
+#[test]
+fn bram_verilog_emission_10_stage() -> Result<(), Error> {
+    // 2^10-point NTT: stage j has delay depth 2^(9 - j).
+    let depths: Vec<usize> = (0..10).map(|j| 1_usize << (9 - j)).collect();
+
+    let verilog_io = emit_pipeline_verilog(&depths, "goldilocks_ntt_1024")?;
+    let text = verilog_io.run()
+        .map_err(|e| Error::VerilogGen(e.to_string()))?;
+
+    // Basic structural checks
+    assert!(text.contains("module goldilocks_ntt_1024"), "missing module declaration");
+    assert!(text.contains("input clk"), "missing clk port");
+    assert!(text.contains("input rst"), "missing rst port");
+
+    // All 10 stage delay arrays present
+    assert!(text.contains("delay_s0"), "missing stage 0 delay array");
+    assert!(text.contains("delay_s9"), "missing stage 9 delay array");
+
+    // Stages 0-4 (depths 512, 256, 128, 64, 33+) use circular buffer
+    assert!(text.contains("delay_s0_ptr"), "stage 0 (depth 512) missing circular buffer pointer");
+    assert!(text.contains("delay_s0[delay_s0_ptr]"), "stage 0 missing dynamic index read");
+    assert!(text.contains("delay_s3_ptr"), "stage 3 (depth 64) missing circular buffer pointer");
+
+    // Stages 5-9 (depths 32, 16, 8, 4, 2, 1) use shift register
+    assert!(!text.contains("delay_s5_ptr"), "stage 5 (depth 32) should not have circ buf pointer");
+    assert!(!text.contains("delay_s9_ptr"), "stage 9 (depth 1) should not have circ buf pointer");
+    // Shift register has explicit element-to-element assigns
+    assert!(text.contains("delay_s5[1] <= delay_s5[0]"), "stage 5 missing shift line");
+
+    // Circular buffer keeps output compact: well under 100K lines
+    let line_count = text.lines().count();
+    assert!(line_count < 100_000, "emitted {line_count} lines; should be compact");
+
+    std::fs::write("target/goldilocks_ntt_1024.v", &text)
+        .map_err(|e| Error::VerilogGen(e.to_string()))?;
+
+    Ok(())
+}
+
 #[test]
 fn basic_arithmetic_integration_test() -> Result<(), hdl_cat_error::Error> {
     use goldilocks_ntt_hdl::hdl::arithmetic::{goldilocks_add_sync, goldilocks_mul_sync};
