@@ -341,12 +341,21 @@ pub fn emit_size_4_pipeline_verilog() -> Result<Io<hdl_cat_error::Error, String>
     Ok(module.flat_map(|m| m.render()))
 }
 
+/// Depth threshold above which arrays use a circular-buffer strategy
+/// instead of a shift register.  32 matches the Xilinx SRL32 primitive
+/// limit: depths that fit in an SRL chain stay as shift registers,
+/// larger depths become BRAM-backed circular buffers with O(1) Verilog.
+const CIRC_BUF_THRESHOLD: usize = 32;
+
 /// Build [`StateArraySpec`](hdl_cat_verilog::StateArraySpec)s for each
 /// stage's delay line, given the list of depths.
 ///
 /// Each stage contributes `depth + 2` state wires in order:
 /// `[delay_0 .. delay_{D-1}, twiddle, counter]`.  The array spec
-/// covers the `delay_0..delay_{D-1}` range.
+/// covers the `delay_0..delay_{D-1}` range.  Stages with depth above
+/// [`CIRC_BUF_THRESHOLD`] use [`ArrayStrategy::CircularBuffer`](hdl_cat_verilog::ArrayStrategy::CircularBuffer),
+/// emitting O(1) Verilog lines; smaller stages use
+/// [`ArrayStrategy::ShiftRegister`](hdl_cat_verilog::ArrayStrategy::ShiftRegister).
 fn build_array_specs(
     depths: &[usize],
     output_wires: &[WireId],
@@ -359,6 +368,11 @@ fn build_array_specs(
             let reset_bits = BitSeq::from_vec(
                 (0..64).map(|_| false).collect(),
             );
+            let strategy = if depth > CIRC_BUF_THRESHOLD {
+                hdl_cat_verilog::ArrayStrategy::CircularBuffer
+            } else {
+                hdl_cat_verilog::ArrayStrategy::ShiftRegister
+            };
             let spec = hdl_cat_verilog::StateArraySpec::new(
                 format!("delay_s{stage_idx}"),
                 offset,
@@ -366,7 +380,7 @@ fn build_array_specs(
                 64,
                 next_delay_0,
                 reset_bits,
-            );
+            ).with_strategy(strategy);
             let new_acc = acc.into_iter()
                 .chain(core::iter::once(spec))
                 .collect();
@@ -711,6 +725,40 @@ mod tests {
         assert!(text.contains("module"), "missing module keyword");
         assert!(text.contains("bram_ntt_single"), "missing module name");
         assert!(text.contains("delay_s0"), "missing delay_s0 array");
+        Ok(())
+    }
+
+    #[test]
+    fn bram_emission_circ_buf_for_large_depth() -> Result<(), crate::error::Error> {
+        // depth 64 > CIRC_BUF_THRESHOLD (32), so stage 0 uses CircularBuffer
+        let verilog_io = emit_pipeline_verilog(&[64, 1], "circ_buf_ntt")?;
+        let text = verilog_io
+            .run()
+            .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
+        assert!(text.contains("module"), "missing module keyword");
+        assert!(text.contains("circ_buf_ntt"), "missing module name");
+        // Stage 0 (depth 64) gets circular buffer: pointer reg + dynamic index
+        assert!(text.contains("delay_s0_ptr"), "missing circular buffer pointer");
+        assert!(text.contains("delay_s0[delay_s0_ptr]"), "missing dynamic index read");
+        // Should NOT have shift-register O(D) lines for stage 0
+        assert!(!text.contains("delay_s0[63] <= delay_s0[62]"), "should not have shift lines");
+        // Stage 1 (depth 1) stays as shift register (below threshold)
+        assert!(text.contains("delay_s1"), "missing delay_s1 array");
+        Ok(())
+    }
+
+    #[test]
+    fn bram_emission_small_depth_stays_shift_register() -> Result<(), crate::error::Error> {
+        // depth 16 <= CIRC_BUF_THRESHOLD, should use shift register
+        let verilog_io = emit_pipeline_verilog(&[16, 1], "shift_reg_ntt")?;
+        let text = verilog_io
+            .run()
+            .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
+        assert!(text.contains("module"), "missing module keyword");
+        // Stage 0 should NOT have circular buffer pointer
+        assert!(!text.contains("delay_s0_ptr"), "should not have circ buf pointer for small depth");
+        // Should have shift-register lines
+        assert!(text.contains("delay_s0[1] <= delay_s0[0]"), "missing shift line");
         Ok(())
     }
 }

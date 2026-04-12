@@ -15,6 +15,8 @@ pub mod arithmetic;
 pub mod butterfly;
 pub mod common;
 pub mod delay;
+pub mod field_hdl;
+pub mod goldilocks_field_hdl;
 pub mod goldilocks_reduce;
 pub mod pipeline;
 pub mod stage;
@@ -32,3 +34,5 @@ pub use goldilocks_reduce::{goldilocks_reduce_arrow, goldilocks_mul_reduce_arrow
 pub use pipeline::{size_4_pipeline, emit_size_4_pipeline_verilog};
 pub use stage::{sdf_stage, sdf_stage_depth_1, sdf_stage_depth_2};
 pub use twiddle::twiddle_accumulator;
+pub use field_hdl::PrimeFieldHdl;
+pub use goldilocks_field_hdl::{Goldilocks, GoldilocksConstants};
