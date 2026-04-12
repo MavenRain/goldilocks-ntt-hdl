@@ -8,7 +8,7 @@ use goldilocks_ntt_hdl::error::Error;
 use goldilocks_ntt_hdl::field::element::GoldilocksElement;
 use goldilocks_ntt_hdl::golden::reference::dif_ntt;
 use goldilocks_ntt_hdl::sim::runner::{SimConfig, simulate_pipeline, simulate_size_4_pipeline};
-use goldilocks_ntt_hdl::hdl::pipeline::emit_size_4_pipeline_verilog;
+use goldilocks_ntt_hdl::hdl::pipeline::{emit_size_4_pipeline_verilog, emit_pipeline_verilog};
 
 /// Compare hdl-cat SDF simulation output with the golden model.
 fn verify_full_pipeline(log_n: u32) -> Result<(), Error> {
@@ -122,6 +122,40 @@ fn sim_output_length_matches_input_size_4() -> Result<(), Error> {
 #[ignore = "larger pipeline tests not yet fully implemented"]
 fn sim_output_length_matches_input_size_16() -> Result<(), Error> {
     verify_full_pipeline(4)
+}
+
+#[test]
+fn bram_verilog_emission_size_4() -> Result<(), Error> {
+    let verilog_io = emit_pipeline_verilog(&[2, 1], "bram_ntt_size_4")?;
+    let text = verilog_io.run()
+        .map_err(|e| Error::VerilogGen(e.to_string()))?;
+
+    assert!(text.contains("module bram_ntt_size_4"));
+    assert!(text.contains("delay_s0"));
+    assert!(text.contains("delay_s1"));
+
+    // Write to target/ for manual inspection / Vivado ingestion
+    std::fs::write("target/bram_ntt_size_4.v", &text)
+        .map_err(|e| Error::VerilogGen(e.to_string()))?;
+
+    Ok(())
+}
+
+#[test]
+fn bram_verilog_emission_size_8() -> Result<(), Error> {
+    let verilog_io = emit_pipeline_verilog(&[4, 2, 1], "bram_ntt_size_8")?;
+    let text = verilog_io.run()
+        .map_err(|e| Error::VerilogGen(e.to_string()))?;
+
+    assert!(text.contains("module bram_ntt_size_8"));
+    assert!(text.contains("delay_s0"));
+    assert!(text.contains("delay_s1"));
+    assert!(text.contains("delay_s2"));
+
+    std::fs::write("target/bram_ntt_size_8.v", &text)
+        .map_err(|e| Error::VerilogGen(e.to_string()))?;
+
+    Ok(())
 }
 
 #[test]

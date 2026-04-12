@@ -341,6 +341,80 @@ pub fn emit_size_4_pipeline_verilog() -> Result<Io<hdl_cat_error::Error, String>
     Ok(module.flat_map(|m| m.render()))
 }
 
+/// Build [`StateArraySpec`](hdl_cat_verilog::StateArraySpec)s for each
+/// stage's delay line, given the list of depths.
+///
+/// Each stage contributes `depth + 2` state wires in order:
+/// `[delay_0 .. delay_{D-1}, twiddle, counter]`.  The array spec
+/// covers the `delay_0..delay_{D-1}` range.
+fn build_array_specs(
+    depths: &[usize],
+    output_wires: &[WireId],
+) -> Vec<hdl_cat_verilog::StateArraySpec> {
+    let (specs, _) = depths.iter().enumerate().fold(
+        (Vec::new(), 0_usize),
+        |(acc, offset), (stage_idx, &depth)| {
+            let next_delay_0 = output_wires.get(offset).copied()
+                .unwrap_or(WireId::new(0));
+            let reset_bits = BitSeq::from_vec(
+                (0..64).map(|_| false).collect(),
+            );
+            let spec = hdl_cat_verilog::StateArraySpec::new(
+                format!("delay_s{stage_idx}"),
+                offset,
+                depth,
+                64,
+                next_delay_0,
+                reset_bits,
+            );
+            let new_acc = acc.into_iter()
+                .chain(core::iter::once(spec))
+                .collect();
+            (new_acc, offset + depth + 2)
+        },
+    );
+    specs
+}
+
+/// Emit an N-stage pipeline to Verilog with BRAM-inferable delay arrays.
+///
+/// Composes the pipeline via [`compose_pipeline`], then emits using
+/// [`hdl_cat_verilog::emit_sync_graph_with_arrays`] so that each
+/// stage's delay line becomes a `reg` array + shift block instead
+/// of individual register declarations.
+///
+/// # Arguments
+///
+/// * `depths` - Delay depth for each stage.
+/// * `name` - Verilog module name.
+///
+/// # Errors
+///
+/// Returns [`Error`] if pipeline construction or Verilog emission fails.
+pub fn emit_pipeline_verilog(
+    depths: &[usize],
+    name: &str,
+) -> Result<Io<hdl_cat_error::Error, String>, Error> {
+    let pipeline = compose_pipeline(depths)?;
+    let (graph, input_wires, output_wires, initial_state, state_wire_count) =
+        pipeline.into_parts();
+
+    let array_specs = build_array_specs(depths, &output_wires);
+
+    let name_owned = name.to_string();
+    let module = hdl_cat_verilog::emit_sync_graph_with_arrays(
+        &graph,
+        &name_owned,
+        state_wire_count,
+        &input_wires,
+        &output_wires,
+        &initial_state,
+        &array_specs,
+    );
+
+    Ok(module.flat_map(|m| m.render()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,6 +659,58 @@ mod tests {
             .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
         assert!(text.contains("module"));
         assert!(text.contains("size_4_ntt_pipeline"));
+        Ok(())
+    }
+
+    #[test]
+    fn bram_emission_size_4_produces_array_decls() -> Result<(), crate::error::Error> {
+        let verilog_io = emit_pipeline_verilog(&[2, 1], "bram_ntt_4")?;
+        let text = verilog_io
+            .run()
+            .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
+        assert!(text.contains("module"), "missing module keyword");
+        assert!(text.contains("bram_ntt_4"), "missing module name");
+        assert!(text.contains("delay_s0"), "missing delay_s0 array");
+        assert!(text.contains("delay_s1"), "missing delay_s1 array");
+        Ok(())
+    }
+
+    #[test]
+    fn bram_emission_3_stage_produces_array_decls() -> Result<(), crate::error::Error> {
+        let verilog_io = emit_pipeline_verilog(&[4, 2, 1], "bram_ntt_8")?;
+        let text = verilog_io
+            .run()
+            .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
+        assert!(text.contains("module"), "missing module keyword");
+        assert!(text.contains("bram_ntt_8"), "missing module name");
+        assert!(text.contains("delay_s0"), "missing delay_s0 array");
+        assert!(text.contains("delay_s1"), "missing delay_s1 array");
+        assert!(text.contains("delay_s2"), "missing delay_s2 array");
+        Ok(())
+    }
+
+    #[test]
+    fn bram_emission_4_stage() -> Result<(), crate::error::Error> {
+        let verilog_io = emit_pipeline_verilog(&[8, 4, 2, 1], "bram_ntt_16")?;
+        let text = verilog_io
+            .run()
+            .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
+        assert!(text.contains("module"), "missing module keyword");
+        assert!(text.contains("bram_ntt_16"), "missing module name");
+        assert!(text.contains("delay_s0"), "missing delay_s0 array");
+        assert!(text.contains("delay_s3"), "missing delay_s3 array");
+        Ok(())
+    }
+
+    #[test]
+    fn bram_emission_single_stage() -> Result<(), crate::error::Error> {
+        let verilog_io = emit_pipeline_verilog(&[4], "bram_ntt_single")?;
+        let text = verilog_io
+            .run()
+            .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
+        assert!(text.contains("module"), "missing module keyword");
+        assert!(text.contains("bram_ntt_single"), "missing module name");
+        assert!(text.contains("delay_s0"), "missing delay_s0 array");
         Ok(())
     }
 }
