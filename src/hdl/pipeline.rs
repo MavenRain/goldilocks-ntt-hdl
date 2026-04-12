@@ -19,6 +19,7 @@ use hdl_cat_bits::Bits;
 use hdl_cat_circuit::{CircuitTensor, Obj};
 use hdl_cat_error::Error;
 use hdl_cat_ir::{HdlGraph, HdlGraphBuilder, WireId};
+use hdl_cat_kind::BitSeq;
 use hdl_cat_sync::Sync;
 
 use crate::hdl::stage::sdf_stage;
@@ -151,6 +152,168 @@ pub fn size_4_pipeline() -> Result<Size4PipelineSync, Error> {
         merged, pipeline_inputs, pipeline_outputs, combined_state, combined_sc,
     ))
 }
+
+/// Accumulated state carried through the stage-folding loop.
+///
+/// At each step, this captures the merged graph so far plus the wire
+/// routing needed to connect the next stage.
+struct PipelineAccum {
+    /// The merged IR graph so far.
+    graph: HdlGraph,
+    /// State input wires (for `state_wire_count` calculation).
+    state_inputs: Vec<WireId>,
+    /// State output wires (next-state feeds).
+    state_outputs: Vec<WireId>,
+    /// Data input wires from the first stage (pipeline-level inputs).
+    data_inputs: Vec<WireId>,
+    /// Step root wires collected so far (one per stage).
+    step_root_inputs: Vec<WireId>,
+    /// Data output wires from the last stage (pipeline-level outputs).
+    data_outputs: Vec<WireId>,
+    /// Concatenated initial state.
+    initial_state: BitSeq,
+    /// Total state wire count.
+    state_wire_count: usize,
+}
+
+/// Split a data-wire slice into `(data_in, valid_in)` and `step_root`.
+///
+/// SDF stages produce data wire layouts `[data_in, valid_in, step_root]`.
+/// Returns `None` if the slice has fewer than 3 elements.
+fn split_data_wires(data: &[WireId]) -> Option<(&[WireId], WireId)> {
+    let (dv, roots) = data.split_at(2.min(data.len()));
+    (dv.len() == 2).then(|| roots.first().copied()).flatten().map(|r| (dv, r))
+}
+
+/// Compose N SDF stages into a single pipeline [`Sync`] machine.
+///
+/// Stage `j` (for `j = 0..num_stages`) has delay depth
+/// `depths[j]`.  The stages are chained: stage j's `data_out` /
+/// `valid_out` feed stage j+1's `data_in` / `valid_in`.  Each stage
+/// receives its own `step_root` from the pipeline-level input bundle.
+///
+/// # Arguments
+///
+/// * `depths` - Slice of delay depths, one per stage.
+///
+/// # Errors
+///
+/// Returns [`Error`] if any stage construction or graph merge fails.
+#[allow(clippy::similar_names, clippy::too_many_lines)]
+pub fn compose_pipeline(depths: &[usize]) -> Result<Sync<Obj<GoldilocksElement>, PipelineInput, PipelineOutput>, Error> {
+    let (&first_depth, rest_depths) = depths.split_first().ok_or_else(|| Error::WidthMismatch {
+        expected: hdl_cat_error::Width::new(1),
+        actual: hdl_cat_error::Width::new(0),
+    })?;
+
+    let stage_0 = sdf_stage(first_depth)?;
+    let (f_graph, f_inputs, f_outputs, f_init, f_sc) = stage_0.into_parts();
+    let (state_f_in, data_f_in) = f_inputs.split_at(f_sc);
+    let (state_f_out, data_f_out) = f_outputs.split_at(f_sc);
+
+    // data_f_in = [data_in, valid_in, step_root_0]
+    // data_f_out = [data_out, valid_out]
+    let (data_in_valid, step_root_0) = split_data_wires(data_f_in)
+        .ok_or_else(|| Error::WidthMismatch {
+            expected: hdl_cat_error::Width::new(3),
+            actual: hdl_cat_error::Width::new(u32::try_from(data_f_in.len()).unwrap_or(0)),
+        })?;
+
+    let accum = PipelineAccum {
+        graph: f_graph,
+        state_inputs: state_f_in.to_vec(),
+        state_outputs: state_f_out.to_vec(),
+        data_inputs: data_in_valid.to_vec(),
+        step_root_inputs: vec![step_root_0],
+        data_outputs: data_f_out.to_vec(),
+        initial_state: f_init,
+        state_wire_count: f_sc,
+    };
+
+    let result = rest_depths.iter().try_fold(accum, |acc, &depth| {
+        let stage = sdf_stage(depth)?;
+        let (g_graph, g_inputs, g_outputs, g_init, g_sc) = stage.into_parts();
+
+        let f_wire_count = acc.graph.wires().len();
+        let shift = |w: WireId| WireId::new(w.index() + f_wire_count);
+
+        let (state_g_in, data_g_in) = g_inputs.split_at(g_sc);
+        let (state_g_out, data_g_out) = g_outputs.split_at(g_sc);
+
+        // data_g_in = [data_in, valid_in, step_root]
+        let (g_dv, g_step_root) = split_data_wires(data_g_in)
+            .ok_or_else(|| Error::WidthMismatch {
+                expected: hdl_cat_error::Width::new(3),
+                actual: hdl_cat_error::Width::new(
+                    u32::try_from(data_g_in.len()).unwrap_or(0),
+                ),
+            })?;
+
+        // Substitute: g data_in -> acc data_out, g valid_in -> acc valid_out
+        let substitution: Vec<(WireId, WireId)> = g_dv.iter()
+            .zip(acc.data_outputs.iter())
+            .map(|(g_w, f_w)| (shift(*g_w), *f_w))
+            .collect();
+
+        let remap_g = move |w: WireId| -> WireId {
+            let shifted = WireId::new(w.index() + f_wire_count);
+            substitution.iter()
+                .find_map(|(from, to)| (*from == shifted).then_some(*to))
+                .unwrap_or(shifted)
+        };
+
+        let merged = merge_graphs(&acc.graph, &g_graph, remap_g);
+
+        Ok::<PipelineAccum, Error>(PipelineAccum {
+            graph: merged,
+            state_inputs: acc.state_inputs.into_iter()
+                .chain(state_g_in.iter().copied().map(shift))
+                .collect(),
+            state_outputs: acc.state_outputs.into_iter()
+                .chain(state_g_out.iter().copied().map(shift))
+                .collect(),
+            data_inputs: acc.data_inputs,
+            step_root_inputs: acc.step_root_inputs.into_iter()
+                .chain(core::iter::once(shift(g_step_root)))
+                .collect(),
+            data_outputs: data_g_out.iter().copied().map(shift).collect(),
+            initial_state: acc.initial_state.concat(g_init),
+            state_wire_count: acc.state_wire_count + g_sc,
+        })
+    })?;
+
+    // Pipeline inputs: state ++ data_in,valid ++ step_root_0 ++ ... ++ step_root_{N-1}
+    let pipeline_inputs: Vec<WireId> = result.state_inputs.into_iter()
+        .chain(result.data_inputs)
+        .chain(result.step_root_inputs)
+        .collect();
+
+    // Pipeline outputs: next_state ++ last stage data_out
+    let pipeline_outputs: Vec<WireId> = result.state_outputs.into_iter()
+        .chain(result.data_outputs)
+        .collect();
+
+    Ok(hdl_cat_sync::machine::from_raw(
+        result.graph,
+        pipeline_inputs,
+        pipeline_outputs,
+        result.initial_state,
+        result.state_wire_count,
+    ))
+}
+
+/// Input bundle for an N-stage pipeline.
+///
+/// The exact circuit-tensor shape depends on the number of stages,
+/// but the flat wire layout is:
+/// `(data_in:64, valid_in:1, step_root_0:64, ..., step_root_{N-1}:64)`.
+pub type PipelineInput = CircuitTensor<
+    CircuitTensor<Obj<GoldilocksElement>, Obj<bool>>,
+    Obj<GoldilocksElement>,
+>;
+
+/// Output bundle for an N-stage pipeline: `(data:64, valid:1)`.
+pub type PipelineOutput = CircuitTensor<Obj<GoldilocksElement>, Obj<bool>>;
 
 /// Emit the size-4 pipeline to Verilog.
 ///
@@ -357,6 +520,60 @@ mod tests {
             },
         )?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn compose_pipeline_builds_size_4() -> Result<(), Error> {
+        let _pipeline = compose_pipeline(&[2, 1])?;
+        Ok(())
+    }
+
+    #[test]
+    fn compose_pipeline_matches_reference() -> Result<(), Error> {
+        let pipeline = compose_pipeline(&[2, 1])?;
+        let step_root_0 = 1_u64;
+        let step_root_1 = 1_u64;
+
+        let data: Vec<u64> = vec![1, 2, 3, 4, 5, 6, 7, 8];
+
+        let inputs: Vec<BitSeq> = data.iter()
+            .map(|d| make_input(*d, true, step_root_0, step_root_1))
+            .collect();
+
+        let tb = Testbench::new(pipeline);
+        let results = tb.run(inputs).run()?;
+
+        let (_, ref_outputs) = data.iter().fold(
+            ((RefStage::new(2), RefStage::new(1)), Vec::new()),
+            |((s0, s1), outs), d| {
+                let (s0, s1, out) = ref_pipeline_step(s0, s1, *d, step_root_0, step_root_1);
+                ((s0, s1), outs.into_iter().chain(core::iter::once(out)).collect())
+            },
+        );
+
+        results.iter().zip(ref_outputs.iter()).enumerate().try_for_each(
+            |(i, (sample, expected))| {
+                let (actual, _) = read_output(sample.value())?;
+                assert_eq!(
+                    actual, *expected,
+                    "compose_pipeline cycle {i}: got {actual:#018x}, expected {expected:#018x}",
+                );
+                Ok::<(), Error>(())
+            },
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn compose_pipeline_empty_depths_errors() {
+        assert!(compose_pipeline(&[]).is_err());
+    }
+
+    #[test]
+    fn compose_pipeline_single_stage() -> Result<(), Error> {
+        let _pipeline = compose_pipeline(&[4])?;
         Ok(())
     }
 

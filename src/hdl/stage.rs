@@ -33,8 +33,8 @@ use crate::hdl::common::{
     GOLDILOCKS_PRIME_U64, GOLDILOCKS_PRIME_U128,
 };
 
-/// Counter width used by the SDF phase logic.  Supports depths up to 2^16.
-pub const COUNTER_BITS: usize = 16;
+/// Counter width used by the SDF phase logic.  Supports depths up to 2^24.
+pub const COUNTER_BITS: usize = 24;
 
 /// Type alias for 64-bit Goldilocks field element.
 pub type GoldilocksElement = Bits<64>;
@@ -440,8 +440,8 @@ fn inline_mul_reduce(
 
 // ── Counter helper ───────────────────────────────────────────────────
 
-/// Create a 16-bit [`BitSeq`] from a `u16`.
-fn u16_to_bitseq(val: u16) -> BitSeq {
+/// Create a [`COUNTER_BITS`]-wide [`BitSeq`] from a `u32`.
+fn counter_to_bitseq(val: u32) -> BitSeq {
     BitSeq::from_vec(
         (0..COUNTER_BITS).map(|i| (val >> i) & 1 == 1).collect(),
     )
@@ -496,33 +496,33 @@ pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
     let (bld, arith) = alloc_constants(bld)?;
 
     // ── Counter constants (16-bit) ───────────────────────────────────
-    let depth_u16 = u16::try_from(depth).map_err(|_| Error::Overflow {
+    let depth_u32 = u32::try_from(depth).map_err(|_| Error::Overflow {
         width: hdl_cat_error::Width::new(u32::MAX),
     })?;
-    let max_counter_u16 = u16::try_from(2 * depth - 1).map_err(|_| Error::Overflow {
+    let max_counter_u32 = u32::try_from(2 * depth - 1).map_err(|_| Error::Overflow {
         width: hdl_cat_error::Width::new(u32::MAX),
     })?;
 
     let (bld, depth_const) = bld.with_wire(WireTy::Bits(counter_bits));
     let (bld, max_counter_const) = bld.with_wire(WireTy::Bits(counter_bits));
-    let (bld, one_16) = bld.with_wire(WireTy::Bits(counter_bits));
-    let (bld, zero_16) = bld.with_wire(WireTy::Bits(counter_bits));
+    let (bld, one_ctr) = bld.with_wire(WireTy::Bits(counter_bits));
+    let (bld, zero_ctr) = bld.with_wire(WireTy::Bits(counter_bits));
 
     let bld = bld.with_instruction(
-        Op::Const { bits: u16_to_bitseq(depth_u16), ty: WireTy::Bits(counter_bits) },
+        Op::Const { bits: counter_to_bitseq(depth_u32), ty: WireTy::Bits(counter_bits) },
         vec![], depth_const,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: u16_to_bitseq(max_counter_u16), ty: WireTy::Bits(counter_bits) },
+        Op::Const { bits: counter_to_bitseq(max_counter_u32), ty: WireTy::Bits(counter_bits) },
         vec![], max_counter_const,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: u16_to_bitseq(1), ty: WireTy::Bits(counter_bits) },
-        vec![], one_16,
+        Op::Const { bits: counter_to_bitseq(1), ty: WireTy::Bits(counter_bits) },
+        vec![], one_ctr,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: u16_to_bitseq(0), ty: WireTy::Bits(counter_bits) },
-        vec![], zero_16,
+        Op::Const { bits: counter_to_bitseq(0), ty: WireTy::Bits(counter_bits) },
+        vec![], zero_ctr,
     )?;
 
     // ── Phase logic ──────────────────────────────────────────────────
@@ -580,14 +580,14 @@ pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
     let (bld, next_counter) = bld.with_wire(WireTy::Bits(counter_bits));
 
     let bld = bld.with_instruction(
-        Op::Bin(BinOp::Add), vec![counter, one_16], counter_inc,
+        Op::Bin(BinOp::Add), vec![counter, one_ctr], counter_inc,
     )?;
     let bld = bld.with_instruction(
         Op::Bin(BinOp::Eq), vec![counter, max_counter_const], counter_at_max,
     )?;
     // at_max=0 -> counter_inc, at_max=1 -> zero (wrap)
     let bld = bld.with_instruction(
-        Op::Mux, vec![counter_at_max, counter_inc, zero_16], next_counter,
+        Op::Mux, vec![counter_at_max, counter_inc, zero_ctr], next_counter,
     )?;
 
     // ── Delay line shift register ────────────────────────────────────
