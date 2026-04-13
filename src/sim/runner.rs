@@ -228,7 +228,12 @@ impl StageState {
 
             lower
         } else {
-            // Fill phase: store in delay buffer, pass through
+            // R2SDF fill: output delay tail, store input
+            let delayed = self.delay_buffer
+                .get(self.write_ptr)
+                .copied()
+                .unwrap_or(GoldilocksElement::ZERO);
+
             if let Some(slot) = self.delay_buffer.get_mut(self.write_ptr) {
                 *slot = input;
             }
@@ -241,7 +246,7 @@ impl StageState {
                 self.twiddle_current = GoldilocksElement::ONE;
             }
 
-            input
+            delayed
         }
     }
 }

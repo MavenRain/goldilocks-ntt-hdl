@@ -4,8 +4,10 @@
 //! phases of length `DEPTH`:
 //!
 //! - **Fill phase** (counter in `[0, D)`): the incoming element is
-//!   written into the delay line (shift register) and passed through
-//!   to the output unchanged.
+//!   written into the delay line and the delay line's oldest element
+//!   (tail) is emitted downstream.  On the first frame the delay
+//!   contains zeros; on subsequent frames it contains the upper-branch
+//!   results from the previous frame's butterfly phase.
 //! - **Butterfly phase** (counter in `[D, 2D)`): the incoming element
 //!   pairs with the element from `DEPTH` cycles ago (the shift
 //!   register's tail).  The DIF butterfly computes
@@ -547,10 +549,11 @@ pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
     let (bld, twiddle_stepped) = inline_mul_reduce(bld, twiddle, step_root, &arith)?;
 
     // ── Phase-dependent muxing ───────────────────────────────────────
-    // data_out: fill -> data_in (pass-through), butterfly -> lower
+    // data_out: fill -> delayed (R2SDF: drain previous upper from delay),
+    //           butterfly -> lower
     let (bld, data_out) = bld.with_wire(WireTy::Bits(64));
     let bld = bld.with_instruction(
-        Op::Mux, vec![phase, data_in, lower], data_out,
+        Op::Mux, vec![phase, delayed, lower], data_out,
     )?;
 
     // valid_out: identity copy
@@ -710,7 +713,8 @@ mod tests {
                 ).unwrap_or(0);
                 (lower, upper, tw)
             } else {
-                (data_in, data_in, 1)
+                // R2SDF fill: output the delay tail, store input
+                (delayed, data_in, 1)
             };
 
             // Shift register: delay_in enters at position 0
@@ -760,22 +764,22 @@ mod tests {
     }
 
     #[test]
-    fn depth_1_fill_pass_through() -> Result<(), Error> {
+    fn depth_1_fill_emits_delay_tail() -> Result<(), Error> {
         let stage = sdf_stage(1)?;
         let step_root = 7_u64; // arbitrary
 
         // Depth 1: fill for 1 cycle, butterfly for 1 cycle.
-        // Cycle 0 (fill): output should be data_in.
+        // Cycle 0 (fill): output should be delay tail (0 on first frame).
         let inputs = vec![
             make_input(42, true, step_root),
-            make_input(99, true, step_root), // butterfly cycle (not checked here)
+            make_input(99, true, step_root), // butterfly cycle
         ];
 
         let tb = Testbench::new(stage);
         let results = tb.run(inputs).run()?;
 
         let (out_0, valid_0) = read_output(results[0].value())?;
-        assert_eq!(out_0, 42, "fill pass-through failed");
+        assert_eq!(out_0, 0, "fill should emit delay tail (0 on first frame)");
         assert!(valid_0, "valid should be true");
 
         Ok(())

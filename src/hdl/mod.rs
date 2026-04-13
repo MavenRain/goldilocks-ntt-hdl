@@ -29,7 +29,7 @@ pub use arithmetic::{
 };
 pub use butterfly::{dif_butterfly, DifButterflySync, BUTTERFLY_LATENCY};
 pub use common::{GoldilocksElement, GOLDILOCKS_PRIME_U64, u64_to_bitseq, bitseq_to_u64};
-pub use delay::{delay_n, goldilocks_delay_7};
+pub use delay::delay_n;
 pub use goldilocks_reduce::{goldilocks_reduce_arrow, goldilocks_mul_reduce_arrow};
 pub use pipeline::{size_4_pipeline, emit_size_4_pipeline_verilog};
 pub use stage::{sdf_stage, sdf_stage_depth_1, sdf_stage_depth_2};

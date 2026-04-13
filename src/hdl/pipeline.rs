@@ -432,7 +432,8 @@ mod tests {
                 ).unwrap_or(0);
                 (lower, upper, tw)
             } else {
-                (data_in, data_in, 1)
+                // R2SDF fill: output delay tail, store input
+                (delayed, data_in, 1)
             };
 
             let next_delay: Vec<u64> = core::iter::once(delay_in)

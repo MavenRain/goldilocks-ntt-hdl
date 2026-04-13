@@ -186,10 +186,4 @@ mod tests {
         Ok(())
     }
 
-    // TODO: Re-enable when sync adder is properly implemented
-    // #[test]
-    // fn sync_adder_builds() -> Result<(), Error> {
-    //     let _adder = goldilocks_add_sync()?;
-    //     Ok(())
-    // }
 }

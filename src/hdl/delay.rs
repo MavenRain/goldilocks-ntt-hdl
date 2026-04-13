@@ -18,44 +18,6 @@ use hdl_cat_sync::Sync;
 /// A generic delay line for any hardware-typable type.
 pub type DelayLine<T> = Sync<Obj<T>, Obj<T>, Obj<T>>;
 
-/// Create a 1-cycle delay for a given type.
-///
-/// # Errors
-///
-/// Returns [`Error`] if IR construction fails.
-pub fn delay_1<T>() -> Result<DelayLine<T>, Error>
-where
-    T: Clone + Default + hdl_cat_kind::Hw + hdl_cat_circuit::object::Scalar,
-{
-    // For simplicity, assume 64-bit elements (Goldilocks)
-    let bit_width = 64u32;
-
-    // Create a register with appropriate width
-    let (bld, input) = HdlGraphBuilder::new().with_wire(WireTy::Bits(bit_width));
-    let (bld, output) = bld.with_wire(WireTy::Bits(bit_width));
-
-    // Create initial state as all zeros
-    let initial_bits: Vec<bool> = (0..64).map(|_| false).collect();
-    let initial_state = BitSeq::from_vec(initial_bits.clone());
-
-    let bld = bld.with_instruction(
-        Op::Reg {
-            init: initial_state.clone(),
-            ty: WireTy::Bits(bit_width),
-        },
-        vec![input],
-        output,
-    )?;
-
-    let arrow: CircuitArrow<Obj<T>, Obj<T>> = CircuitArrow::from_raw_parts(
-        bld.build(),
-        vec![input],
-        vec![output],
-    );
-
-    Sync::from_arrow(arrow, initial_state)
-}
-
 /// Create an N-cycle delay using a single Array-typed state wire.
 ///
 /// The delay line is represented as one `WireTy::Array` wire with
@@ -128,18 +90,6 @@ where
             1, // 1 state wire (the array)
         ))
     }
-}
-
-/// Type alias for a 7-cycle delay of 64-bit Goldilocks elements.
-pub type GoldilocksDelay7 = DelayLine<hdl_cat_bits::Bits<64>>;
-
-/// Create a 7-cycle delay for Goldilocks elements.
-///
-/// # Errors
-///
-/// Returns [`Error`] if IR construction fails.
-pub fn goldilocks_delay_7() -> Result<GoldilocksDelay7, Error> {
-    delay_n::<hdl_cat_bits::Bits<64>>(7)
 }
 
 #[cfg(test)]
