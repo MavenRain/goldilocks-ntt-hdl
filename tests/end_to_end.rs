@@ -201,6 +201,47 @@ fn bram_verilog_emission_10_stage() -> Result<(), Error> {
     Ok(())
 }
 
+/// Full 24-stage pipeline (2^24 = 16,777,216-point NTT).
+///
+/// Depths: `[2^23, 2^22, ..., 2^0]`.  The largest stage (depth 2^23)
+/// was previously infeasible because the IR allocated one wire per
+/// delay element (~8M wires).  With `WireTy::Array`, each stage
+/// uses a single array wire regardless of depth, so the full
+/// pipeline composes and emits in bounded time and memory.
+#[test]
+fn bram_verilog_emission_24_stage() -> Result<(), Error> {
+    // 2^24-point NTT: stage j has delay depth 2^(23 - j).
+    let depths: Vec<usize> = (0..24).map(|j| 1_usize << (23 - j)).collect();
+
+    let verilog_io = emit_pipeline_verilog(&depths, "goldilocks_ntt_2_24")?;
+    let text = verilog_io.run()
+        .map_err(|e| Error::VerilogGen(e.to_string()))?;
+
+    // Basic structural checks.
+    assert!(text.contains("module goldilocks_ntt_2_24"), "missing module declaration");
+    assert!(text.contains("input clk"), "missing clk port");
+    assert!(text.contains("input rst"), "missing rst port");
+
+    // All 24 stage delay arrays present.
+    let arr_decl_count = text.match_indices("reg [63:0]").count();
+    assert!(arr_decl_count >= 24, "expected >= 24 array decls, got {arr_decl_count}");
+
+    // Large-depth stages use circular buffer.
+    assert!(text.contains("_ptr"), "missing circular buffer pointers");
+
+    // Small-depth stages use shift register.
+    assert!(text.contains("[1] <="), "missing shift-register lines");
+
+    // Output should be compact (circular buffers are O(1) per stage).
+    let line_count = text.lines().count();
+    assert!(line_count < 200_000, "emitted {line_count} lines; should be compact");
+
+    std::fs::write("target/goldilocks_ntt_2_24.v", &text)
+        .map_err(|e| Error::VerilogGen(e.to_string()))?;
+
+    Ok(())
+}
+
 #[test]
 fn basic_arithmetic_integration_test() -> Result<(), hdl_cat_error::Error> {
     use goldilocks_ntt_hdl::hdl::arithmetic::{goldilocks_add_sync, goldilocks_mul_sync};
