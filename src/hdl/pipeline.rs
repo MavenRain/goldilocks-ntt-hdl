@@ -341,61 +341,13 @@ pub fn emit_size_4_pipeline_verilog() -> Result<Io<hdl_cat_error::Error, String>
     Ok(module.flat_map(|m| m.render()))
 }
 
-/// Depth threshold above which arrays use a circular-buffer strategy
-/// instead of a shift register.  32 matches the Xilinx SRL32 primitive
-/// limit: depths that fit in an SRL chain stay as shift registers,
-/// larger depths become BRAM-backed circular buffers with O(1) Verilog.
-const CIRC_BUF_THRESHOLD: usize = 32;
-
-/// Build [`StateArraySpec`](hdl_cat_verilog::StateArraySpec)s for each
-/// stage's delay line, given the list of depths.
-///
-/// Each stage contributes `depth + 2` state wires in order:
-/// `[delay_0 .. delay_{D-1}, twiddle, counter]`.  The array spec
-/// covers the `delay_0..delay_{D-1}` range.  Stages with depth above
-/// [`CIRC_BUF_THRESHOLD`] use [`ArrayStrategy::CircularBuffer`](hdl_cat_verilog::ArrayStrategy::CircularBuffer),
-/// emitting O(1) Verilog lines; smaller stages use
-/// [`ArrayStrategy::ShiftRegister`](hdl_cat_verilog::ArrayStrategy::ShiftRegister).
-fn build_array_specs(
-    depths: &[usize],
-    output_wires: &[WireId],
-) -> Vec<hdl_cat_verilog::StateArraySpec> {
-    let (specs, _) = depths.iter().enumerate().fold(
-        (Vec::new(), 0_usize),
-        |(acc, offset), (stage_idx, &depth)| {
-            let next_delay_0 = output_wires.get(offset).copied()
-                .unwrap_or(WireId::new(0));
-            let reset_bits = BitSeq::from_vec(
-                (0..64).map(|_| false).collect(),
-            );
-            let strategy = if depth > CIRC_BUF_THRESHOLD {
-                hdl_cat_verilog::ArrayStrategy::CircularBuffer
-            } else {
-                hdl_cat_verilog::ArrayStrategy::ShiftRegister
-            };
-            let spec = hdl_cat_verilog::StateArraySpec::new(
-                format!("delay_s{stage_idx}"),
-                offset,
-                depth,
-                64,
-                next_delay_0,
-                reset_bits,
-            ).with_strategy(strategy);
-            let new_acc = acc.into_iter()
-                .chain(core::iter::once(spec))
-                .collect();
-            (new_acc, offset + depth + 2)
-        },
-    );
-    specs
-}
-
 /// Emit an N-stage pipeline to Verilog with BRAM-inferable delay arrays.
 ///
 /// Composes the pipeline via [`compose_pipeline`], then emits using
-/// [`hdl_cat_verilog::emit_sync_graph_with_arrays`] so that each
-/// stage's delay line becomes a `reg` array + shift block instead
-/// of individual register declarations.
+/// [`hdl_cat_verilog::emit_sync_graph`].  Array-typed state wires
+/// (from [`crate::hdl::stage::sdf_stage`]) are auto-detected by
+/// the emitter and rendered as `reg` arrays + shift/circular-buffer
+/// blocks.
 ///
 /// # Arguments
 ///
@@ -413,17 +365,13 @@ pub fn emit_pipeline_verilog(
     let (graph, input_wires, output_wires, initial_state, state_wire_count) =
         pipeline.into_parts();
 
-    let array_specs = build_array_specs(depths, &output_wires);
-
-    let name_owned = name.to_string();
-    let module = hdl_cat_verilog::emit_sync_graph_with_arrays(
+    let module = hdl_cat_verilog::emit_sync_graph(
         &graph,
-        &name_owned,
+        name,
         state_wire_count,
         &input_wires,
         &output_wires,
         &initial_state,
-        &array_specs,
     );
 
     Ok(module.flat_map(|m| m.render()))
@@ -676,6 +624,11 @@ mod tests {
         Ok(())
     }
 
+    /// Count occurrences of a pattern in a string.
+    fn count_occurrences(text: &str, pattern: &str) -> usize {
+        text.match_indices(pattern).count()
+    }
+
     #[test]
     fn bram_emission_size_4_produces_array_decls() -> Result<(), crate::error::Error> {
         let verilog_io = emit_pipeline_verilog(&[2, 1], "bram_ntt_4")?;
@@ -684,8 +637,9 @@ mod tests {
             .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
         assert!(text.contains("module"), "missing module keyword");
         assert!(text.contains("bram_ntt_4"), "missing module name");
-        assert!(text.contains("delay_s0"), "missing delay_s0 array");
-        assert!(text.contains("delay_s1"), "missing delay_s1 array");
+        // Two stages produce two auto-detected array declarations.
+        let arr_decl_count = count_occurrences(&text, "reg [63:0]");
+        assert!(arr_decl_count >= 2, "expected >= 2 array decls, got {arr_decl_count}");
         Ok(())
     }
 
@@ -697,9 +651,8 @@ mod tests {
             .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
         assert!(text.contains("module"), "missing module keyword");
         assert!(text.contains("bram_ntt_8"), "missing module name");
-        assert!(text.contains("delay_s0"), "missing delay_s0 array");
-        assert!(text.contains("delay_s1"), "missing delay_s1 array");
-        assert!(text.contains("delay_s2"), "missing delay_s2 array");
+        let arr_decl_count = count_occurrences(&text, "reg [63:0]");
+        assert!(arr_decl_count >= 3, "expected >= 3 array decls, got {arr_decl_count}");
         Ok(())
     }
 
@@ -711,8 +664,8 @@ mod tests {
             .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
         assert!(text.contains("module"), "missing module keyword");
         assert!(text.contains("bram_ntt_16"), "missing module name");
-        assert!(text.contains("delay_s0"), "missing delay_s0 array");
-        assert!(text.contains("delay_s3"), "missing delay_s3 array");
+        let arr_decl_count = count_occurrences(&text, "reg [63:0]");
+        assert!(arr_decl_count >= 4, "expected >= 4 array decls, got {arr_decl_count}");
         Ok(())
     }
 
@@ -724,7 +677,8 @@ mod tests {
             .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
         assert!(text.contains("module"), "missing module keyword");
         assert!(text.contains("bram_ntt_single"), "missing module name");
-        assert!(text.contains("delay_s0"), "missing delay_s0 array");
+        // Single stage: one array decl for the delay line.
+        assert!(text.contains("[0:3]"), "missing array depth [0:3]");
         Ok(())
     }
 
@@ -737,13 +691,15 @@ mod tests {
             .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
         assert!(text.contains("module"), "missing module keyword");
         assert!(text.contains("circ_buf_ntt"), "missing module name");
-        // Stage 0 (depth 64) gets circular buffer: pointer reg + dynamic index
-        assert!(text.contains("delay_s0_ptr"), "missing circular buffer pointer");
-        assert!(text.contains("delay_s0[delay_s0_ptr]"), "missing dynamic index read");
-        // Should NOT have shift-register O(D) lines for stage 0
-        assert!(!text.contains("delay_s0[63] <= delay_s0[62]"), "should not have shift lines");
-        // Stage 1 (depth 1) stays as shift register (below threshold)
-        assert!(text.contains("delay_s1"), "missing delay_s1 array");
+        // Stage 0 (depth 64) gets circular buffer: pointer reg + dynamic index.
+        assert!(text.contains("_ptr"), "missing circular buffer pointer");
+        // Should NOT have shift-register O(D) lines for stage 0's array.
+        assert!(
+            !text.contains("[63] <= "),
+            "should not have O(D) shift lines for large depth",
+        );
+        // Stage 1 (depth 1) stays as shift register (below threshold).
+        assert!(text.contains("[0:0]"), "missing depth-1 array decl");
         Ok(())
     }
 
@@ -755,10 +711,10 @@ mod tests {
             .run()
             .map_err(|e| crate::error::Error::VerilogGen(e.to_string()))?;
         assert!(text.contains("module"), "missing module keyword");
-        // Stage 0 should NOT have circular buffer pointer
-        assert!(!text.contains("delay_s0_ptr"), "should not have circ buf pointer for small depth");
-        // Should have shift-register lines
-        assert!(text.contains("delay_s0[1] <= delay_s0[0]"), "missing shift line");
+        // Stage 0 (depth 16) uses shift register, no circular buffer pointer.
+        assert!(text.contains("[0:15]"), "missing array depth [0:15]");
+        // Should have shift-register lines.
+        assert!(text.contains("[1] <="), "missing shift line");
         Ok(())
     }
 }

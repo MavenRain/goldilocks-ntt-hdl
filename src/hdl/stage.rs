@@ -475,14 +475,9 @@ pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
     let counter_bits = u32::try_from(COUNTER_BITS).unwrap_or(16);
 
     // ── Source wire allocation ────────────────────────────────────────
-    // State wires: delay_0 .. delay_{D-1}, twiddle, counter
-    let (bld, delay_wires) = (0..depth).fold(
-        (HdlGraphBuilder::new(), Vec::new()),
-        |(b, v), _| {
-            let (b, w) = b.with_wire(WireTy::Bits(64));
-            (b, v.into_iter().chain(core::iter::once(w)).collect())
-        },
-    );
+    // State wires: delay_arr (Array), twiddle, counter
+    let delay_ty = WireTy::Array { element_width: 64, depth };
+    let (bld, delay_arr) = HdlGraphBuilder::new().with_wire(delay_ty.clone());
 
     let (bld, twiddle) = bld.with_wire(WireTy::Bits(64));
     let (bld, counter) = bld.with_wire(WireTy::Bits(counter_bits));
@@ -535,10 +530,12 @@ pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
     )?;
     let bld = bld.with_instruction(Op::Not, vec![counter_lt_depth], phase)?;
 
-    // ── Read delayed value (tail of shift register) ──────────────────
+    // ── Read delayed value (tail of array) ────────────────────────────
     let (bld, delayed) = bld.with_wire(WireTy::Bits(64));
     let bld = bld.with_instruction(
-        Op::Slice { lo: 0, hi: 64 }, vec![delay_wires[depth - 1]], delayed,
+        Op::ArrayTail { element_width: 64, depth },
+        vec![delay_arr],
+        delayed,
     )?;
 
     // ── Butterfly arithmetic (always computed; muxed by phase) ────────
@@ -590,55 +587,37 @@ pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
         Op::Mux, vec![counter_at_max, counter_inc, zero_ctr], next_counter,
     )?;
 
-    // ── Delay line shift register ────────────────────────────────────
-    // next_delay_0 = delay_in (identity copy via Slice)
-    let (bld, next_delay_0) = bld.with_wire(WireTy::Bits(64));
+    // ── Delay line: shift in via ArrayShiftIn ──────────────────────────
+    let (bld, next_delay_arr) = bld.with_wire(delay_ty);
     let bld = bld.with_instruction(
-        Op::Slice { lo: 0, hi: 64 }, vec![delay_in], next_delay_0,
-    )?;
-
-    // next_delay_i = delay_{i-1} for i in 1..D
-    let (bld, next_delay_wires) = (1..depth).try_fold(
-        (bld, vec![next_delay_0]),
-        |acc, i| {
-            let (b, v) = acc;
-            let (b, w) = b.with_wire(WireTy::Bits(64));
-            let b = b.with_instruction(
-                Op::Slice { lo: 0, hi: 64 }, vec![delay_wires[i - 1]], w,
-            )?;
-            Ok::<_, Error>((b, v.into_iter().chain(core::iter::once(w)).collect()))
-        },
+        Op::ArrayShiftIn { element_width: 64, depth },
+        vec![delay_arr, delay_in],
+        next_delay_arr,
     )?;
 
     // ── Build the graph and assemble the Sync machine ────────────────
     let graph = bld.build();
 
     // Input wires: state ++ data
-    // State: [delay_0 .. delay_{D-1}, twiddle, counter]
+    // State: [delay_arr, twiddle, counter]
     // Data:  [data_in, valid_in, step_root]
-    let input_wires: Vec<WireId> = delay_wires.iter().copied()
-        .chain(core::iter::once(twiddle))
-        .chain(core::iter::once(counter))
-        .chain(core::iter::once(data_in))
-        .chain(core::iter::once(valid_in))
-        .chain(core::iter::once(step_root))
+    let input_wires: Vec<WireId> = [delay_arr, twiddle, counter, data_in, valid_in, step_root]
+        .into_iter()
         .collect();
 
     // Output wires: next_state ++ data_output
-    // Next state: [next_delay_0 .. next_delay_{D-1}, next_twiddle, next_counter]
+    // Next state: [next_delay_arr, next_twiddle, next_counter]
     // Data out:   [data_out, valid_out]
-    let output_wires: Vec<WireId> = next_delay_wires.iter().copied()
-        .chain(core::iter::once(next_twiddle))
-        .chain(core::iter::once(next_counter))
-        .chain(core::iter::once(data_out))
-        .chain(core::iter::once(valid_out))
-        .collect();
+    let output_wires: Vec<WireId> =
+        [next_delay_arr, next_twiddle, next_counter, data_out, valid_out]
+            .into_iter()
+            .collect();
 
-    let state_wire_count = depth + 2; // D delays + twiddle + counter
+    let state_wire_count = 3; // array + twiddle + counter
 
-    // Initial state: delays = 0, twiddle = 1, counter = 0
+    // Initial state (compact): delay element = 0, twiddle = 1, counter = 0
     let initial_state = BitSeq::from_vec(
-        (0..64 * depth).map(|_| false)           // delay registers: zero
+        (0..64).map(|_| false)                   // delay element reset (compact)
             .chain(core::iter::once(true))        // twiddle bit 0 = 1
             .chain((1..64).map(|_| false))        // twiddle remaining bits
             .chain((0..COUNTER_BITS).map(|_| false)) // counter: zero
