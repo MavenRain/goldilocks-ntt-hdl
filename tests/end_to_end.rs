@@ -7,7 +7,7 @@
 use goldilocks_ntt_hdl::error::Error;
 use goldilocks_ntt_hdl::field::element::GoldilocksElement;
 use goldilocks_ntt_hdl::golden::reference::dif_ntt;
-use goldilocks_ntt_hdl::sim::runner::{SimConfig, simulate_pipeline, simulate_size_4_pipeline};
+use goldilocks_ntt_hdl::sim::runner::{SimConfig, simulate_pipeline};
 use goldilocks_ntt_hdl::hdl::pipeline::{emit_size_4_pipeline_verilog, emit_pipeline_verilog};
 
 /// Compare SDF simulation output with the golden model.
@@ -114,7 +114,7 @@ fn golden_model_round_trip_size_16() -> Result<(), Error> {
 }
 
 #[test]
-fn hdl_cat_size_4_simulation_basic() -> Result<(), hdl_cat_error::Error> {
+fn hdl_cat_size_4_simulation_basic() -> Result<(), Error> {
     let input = vec![
         GoldilocksElement::new(1),
         GoldilocksElement::new(2),
@@ -122,11 +122,10 @@ fn hdl_cat_size_4_simulation_basic() -> Result<(), hdl_cat_error::Error> {
         GoldilocksElement::new(4),
     ];
 
-    let result = simulate_size_4_pipeline(input).run()?;
+    let config = SimConfig::new(input, 2)?;
+    let result = simulate_pipeline(config).run()?;
 
-    // Basic verification: we get some output
-    assert!(!result.is_empty());
-    assert!(result.len() <= 4); // At most the input length
+    assert_eq!(result.len(), 4);
 
     Ok(())
 }
@@ -150,8 +149,7 @@ fn sim_output_length_matches_input_size_4() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore = "larger pipeline tests not yet fully implemented"]
-fn sim_output_length_matches_input_size_16() -> Result<(), Error> {
+fn ntt_correctness_size_16() -> Result<(), Error> {
     verify_full_pipeline(4)
 }
 

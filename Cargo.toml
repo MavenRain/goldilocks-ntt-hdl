@@ -1,6 +1,6 @@
 [package]
 name = "goldilocks-ntt-hdl"
-version = "0.5.3"
+version = "0.6.0"
 edition = "2024"
 description = "2^24-point NTT over the Goldilocks field: SDF pipeline in hdl-cat with comp-cat-rs categorical structure"
 license = "MIT OR Apache-2.0"

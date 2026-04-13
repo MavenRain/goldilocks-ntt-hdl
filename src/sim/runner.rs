@@ -1,8 +1,8 @@
-//! Behavioral simulation runner for the NTT pipeline.
+//! Cycle-accurate simulation runner for the NTT pipeline.
 //!
-//! Simulates the SDF pipeline using hdl-cat's `Testbench` to drive the
-//! actual circuit IR through multiple clock cycles. This provides
-//! cycle-accurate simulation of the hardware pipeline.
+//! Drives [`compose_pipeline`] through hdl-cat's [`Testbench`] to
+//! produce a cycle-accurate simulation of the hardware SDF pipeline.
+//! Works for any stage count from 0 to [`NTT_STAGES`].
 //!
 //! All side effects are wrapped in [`Io::suspend`].
 
@@ -15,7 +15,7 @@ use crate::field::element::GoldilocksElement;
 use crate::field::roots::primitive_root_of_unity;
 use crate::graph::ntt_graph::NTT_STAGES;
 use crate::hdl::common::{bitseq_to_u64, u64_to_bitseq};
-use crate::hdl::pipeline::size_4_pipeline;
+use crate::hdl::pipeline::compose_pipeline;
 
 /// Description of a simulation run.
 #[derive(Debug, Clone)]
@@ -57,8 +57,8 @@ impl SimConfig {
 
 /// Build an `Io` that simulates the SDF pipeline using hdl-cat's Testbench.
 ///
-/// Creates the appropriate pipeline based on `num_stages` and drives it
-/// with the input data through hdl-cat's cycle-accurate simulation.
+/// Creates the appropriate pipeline via [`compose_pipeline`] and drives
+/// it with the input data through hdl-cat's cycle-accurate simulation.
 ///
 /// # Examples
 ///
@@ -80,198 +80,87 @@ pub fn simulate_pipeline(config: SimConfig) -> Io<Error, Vec<GoldilocksElement>>
     Io::suspend(move || run_hdl_cat_sim(&config))
 }
 
-/// Simulate a size-4 pipeline specifically using hdl-cat.
-#[must_use]
-pub fn simulate_size_4_pipeline(
-    input: Vec<GoldilocksElement>,
-) -> Io<hdl_cat_error::Error, Vec<GoldilocksElement>> {
-    Io::suspend(move || {
-        let pipeline = size_4_pipeline()?;
+/// Compute delay depths for an `num_stages`-stage pipeline.
+///
+/// Stage `j` has delay depth `2^(num_stages - 1 - j)`.
+fn stage_depths(num_stages: usize) -> Vec<usize> {
+    (0..num_stages)
+        .map(|j| 1_usize << (num_stages - 1 - j))
+        .collect()
+}
 
-        // Get twiddle roots for size-4 NTT
-        let step_root_0 = primitive_root_of_unity(2)
-            .map_err(|_| hdl_cat_error::Error::WidthMismatch {
-                expected: hdl_cat_error::Width::new(64),
-                actual: hdl_cat_error::Width::new(64),
-            })?;
-        let step_root_1 = primitive_root_of_unity(1)
-            .map_err(|_| hdl_cat_error::Error::WidthMismatch {
-                expected: hdl_cat_error::Width::new(64),
-                actual: hdl_cat_error::Width::new(64),
-            })?;
+/// Compute step roots for each stage.
+///
+/// Stage `j` of a `num_stages`-stage pipeline uses the primitive
+/// `2^(num_stages - j)`-th root of unity as its step root.
+fn step_roots(num_stages: usize) -> Result<Vec<GoldilocksElement>, Error> {
+    (0..num_stages)
+        .map(|j| {
+            let order_bits = u32::try_from(num_stages - j)
+                .map_err(|e| Error::Field(e.to_string()))?;
+            primitive_root_of_unity(order_bits)
+        })
+        .collect()
+}
 
-        // Convert input to BitSeq format - concatenate all inputs per cycle
-        let inputs: Vec<BitSeq> = input
-            .iter()
-            .map(|elem| {
-                let data_bits = u64_to_bitseq(elem.value());
-                let valid_bits = BitSeq::from_vec(vec![true]);
-                let step_root_0_bits = u64_to_bitseq(step_root_0.value());
-                let step_root_1_bits = u64_to_bitseq(step_root_1.value());
+/// Pack one cycle's input into a [`BitSeq`].
+///
+/// Wire layout: `data_in:64 ++ valid_in:1 ++ step_root_0:64 ++ ... ++ step_root_{N-1}:64`.
+fn pack_input(data: GoldilocksElement, roots: &[GoldilocksElement]) -> BitSeq {
+    let base = u64_to_bitseq(data.value())
+        .concat(BitSeq::from_vec(vec![true]));
 
-                // Concatenate all input signals for this cycle
-                data_bits
-                    .concat(valid_bits)
-                    .concat(step_root_0_bits)
-                    .concat(step_root_1_bits)
-            })
-            .collect();
-
-        // Run simulation
-        let testbench = Testbench::new(pipeline);
-        let outputs = testbench.run(inputs).run()?;
-
-        // Convert outputs back to GoldilocksElement
-        // Each TimedSample contains a BitSeq with concatenated outputs
-        let results: Result<Vec<GoldilocksElement>, hdl_cat_error::Error> = outputs
-            .iter()
-            .map(|timed_sample| {
-                let output_bitseq = timed_sample.value();
-
-                // For simplicity, assume first 64 bits are data, next bit is valid
-                if output_bitseq.len() >= 65 {
-                    // Extract data (first 64 bits) and valid (65th bit)
-                    let (data_bits, rest) = output_bitseq.clone().split_at(64);
-                    let (valid_bits, _) = rest.split_at(1);
-
-                    let data_u64 = bitseq_to_u64(&data_bits)?;
-                    let valid = valid_bits.bit(0);
-
-                    if valid {
-                        Ok(GoldilocksElement::new(data_u64))
-                    } else {
-                        // Return zero for invalid outputs
-                        Ok(GoldilocksElement::ZERO)
-                    }
-                } else {
-                    Err(hdl_cat_error::Error::WidthMismatch {
-                        expected: hdl_cat_error::Width::new(65),
-                        actual: hdl_cat_error::Width::new(u32::try_from(output_bitseq.len()).unwrap_or(0)),
-                    })
-                }
-            })
-            .collect();
-
-        results
+    roots.iter().fold(base, |acc, root| {
+        acc.concat(u64_to_bitseq(root.value()))
     })
+}
+
+/// Extract `(data, valid)` from a pipeline output [`BitSeq`].
+fn unpack_output(bits: &BitSeq) -> Result<(GoldilocksElement, bool), Error> {
+    if bits.len() < 65 {
+        Err(Error::Field(format!(
+            "output too short: expected >= 65 bits, got {}",
+            bits.len(),
+        )))
+    } else {
+        let (data_bits, rest) = bits.clone().split_at(64);
+        let (valid_bits, _) = rest.split_at(1);
+        let data = bitseq_to_u64(&data_bits)?;
+        let valid = valid_bits.bit(0);
+        Ok((GoldilocksElement::new(data), valid))
+    }
 }
 
 /// Run the hdl-cat simulation.
 fn run_hdl_cat_sim(config: &SimConfig) -> Result<Vec<GoldilocksElement>, Error> {
-    match config.num_stages {
-        0 => {
-            // Zero stages = passthrough
-            Ok(config.input.clone())
-        },
-        2 => {
-            // Use size-4 pipeline for 2 stages
-            let result = simulate_size_4_pipeline(config.input.clone()).run()
-                .map_err(|e| Error::Field(format!("HDL simulation failed: {e}")))?;
-            Ok(result)
-        },
-        _ => {
-            // For other stage counts, fall back to behavioral simulation
-            run_behavioral_sim(config)
-        }
-    }
-}
-
-/// Behavioral SDF stage state (fallback for unsupported stage counts).
-struct StageState {
-    delay_buffer: Vec<GoldilocksElement>,
-    write_ptr: usize,
-    counter: usize,
-    in_butterfly_phase: bool,
-    delay_depth: usize,
-    twiddle_current: GoldilocksElement,
-    twiddle_step: GoldilocksElement,
-}
-
-impl StageState {
-    fn new(delay_depth: usize, twiddle_step: GoldilocksElement) -> Self {
-        Self {
-            delay_buffer: vec![GoldilocksElement::ZERO; delay_depth],
-            write_ptr: 0,
-            counter: 0,
-            in_butterfly_phase: false,
-            delay_depth,
-            twiddle_current: GoldilocksElement::ONE,
-            twiddle_step,
-        }
+    if config.num_stages == 0 {
+        return Ok(config.input.clone());
     }
 
-    /// Process one element through this stage, returning the output.
-    fn process(&mut self, input: GoldilocksElement) -> GoldilocksElement {
-        if self.in_butterfly_phase {
-            // Read delayed element
-            let delayed = self.delay_buffer
-                .get(self.write_ptr)
-                .copied()
-                .unwrap_or(GoldilocksElement::ZERO);
+    let depths = stage_depths(config.num_stages);
+    let roots = step_roots(config.num_stages)?;
 
-            // Write new element into delay buffer (feedback)
-            let upper = delayed + input;
-            if let Some(slot) = self.delay_buffer.get_mut(self.write_ptr) {
-                *slot = upper;
+    let pipeline = compose_pipeline(&depths)
+        .map_err(|e| Error::Field(format!("pipeline construction failed: {e}")))?;
+
+    let inputs: Vec<BitSeq> = config.input.iter()
+        .map(|elem| pack_input(*elem, &roots))
+        .collect();
+
+    let testbench = Testbench::new(pipeline);
+    let outputs = testbench.run(inputs).run()
+        .map_err(|e| Error::Field(format!("HDL simulation failed: {e}")))?;
+
+    outputs.iter()
+        .map(|sample| {
+            let (data, valid) = unpack_output(sample.value())?;
+            if valid {
+                Ok(data)
+            } else {
+                Ok(GoldilocksElement::ZERO)
             }
-            self.write_ptr = (self.write_ptr + 1) % self.delay_depth.max(1);
-
-            // Lower path: (delayed - input) * twiddle
-            let lower = (delayed - input) * self.twiddle_current;
-            self.twiddle_current = self.twiddle_current * self.twiddle_step;
-
-            self.counter += 1;
-            if self.counter >= self.delay_depth {
-                self.counter = 0;
-                self.in_butterfly_phase = false;
-            }
-
-            lower
-        } else {
-            // R2SDF fill: output delay tail, store input
-            let delayed = self.delay_buffer
-                .get(self.write_ptr)
-                .copied()
-                .unwrap_or(GoldilocksElement::ZERO);
-
-            if let Some(slot) = self.delay_buffer.get_mut(self.write_ptr) {
-                *slot = input;
-            }
-            self.write_ptr = (self.write_ptr + 1) % self.delay_depth.max(1);
-
-            self.counter += 1;
-            if self.counter >= self.delay_depth {
-                self.counter = 0;
-                self.in_butterfly_phase = true;
-                self.twiddle_current = GoldilocksElement::ONE;
-            }
-
-            delayed
-        }
-    }
-}
-
-/// Run the behavioral simulation (fallback for unsupported pipelines).
-fn run_behavioral_sim(config: &SimConfig) -> Result<Vec<GoldilocksElement>, Error> {
-    // Build stage states with correct parameters
-    let mut stages: Vec<StageState> = (0..config.num_stages)
-        .map(|k| {
-            let delay_depth = 1_usize << (23 - k);
-            let order_bits = u32::try_from(NTT_STAGES - k)
-                .map_err(|e| Error::Field(e.to_string()))?;
-            let step_root = primitive_root_of_unity(order_bits)?;
-            Ok(StageState::new(delay_depth, step_root))
         })
-        .collect::<Result<Vec<_>, Error>>()?;
-
-    // Feed each input element through the pipeline
-    let outputs: Vec<GoldilocksElement> = config.input.iter().map(|elem| {
-        stages.iter_mut().fold(*elem, |value, stage| {
-            stage.process(value)
-        })
-    }).collect();
-
-    Ok(outputs)
+        .collect()
 }
 
 #[cfg(test)]
@@ -306,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn hdl_cat_size_4_simulation_works() -> Result<(), hdl_cat_error::Error> {
+    fn hdl_cat_size_4_simulation_works() -> Result<(), Error> {
         let input = vec![
             GoldilocksElement::new(1),
             GoldilocksElement::new(2),
@@ -314,9 +203,21 @@ mod tests {
             GoldilocksElement::new(4),
         ];
 
-        let result = simulate_size_4_pipeline(input.clone()).run()?;
-        // Basic sanity check: we got some output
+        let config = SimConfig::new(input, 2)?;
+        let result = simulate_pipeline(config).run()?;
         assert!(!result.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn hdl_cat_size_16_simulation_works() -> Result<(), Error> {
+        let input: Vec<GoldilocksElement> = (1..=16)
+            .map(GoldilocksElement::new)
+            .collect();
+
+        let config = SimConfig::new(input, 4)?;
+        let result = simulate_pipeline(config).run()?;
+        assert_eq!(result.len(), 16);
         Ok(())
     }
 }
