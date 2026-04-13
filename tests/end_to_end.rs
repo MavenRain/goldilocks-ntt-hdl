@@ -149,6 +149,11 @@ fn sim_output_length_matches_input_size_4() -> Result<(), Error> {
 }
 
 #[test]
+fn ntt_correctness_size_8() -> Result<(), Error> {
+    verify_full_pipeline(3)
+}
+
+#[test]
 fn ntt_correctness_size_16() -> Result<(), Error> {
     verify_full_pipeline(4)
 }

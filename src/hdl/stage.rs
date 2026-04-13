@@ -19,9 +19,11 @@
 //! advances by `step_root` each butterfly cycle, producing the
 //! sequence `1, w, w^2, ...` over the D butterfly cycles.
 //!
-//! This module inlines single-cycle combinational arithmetic (modular
-//! add, sub, and 64x64 multiply-reduce) so the SDF phase logic is
-//! fully contained in one [`Sync`] machine per stage.
+//! The modular arithmetic (add, sub, multiply-reduce) is supplied by a
+//! [`PrimeFieldHdl`] implementation, so the SDF phase logic is
+//! field-generic.  The Goldilocks instantiation is provided by
+//! [`sdf_stage`], which delegates to [`sdf_stage_generic`] with the
+//! [`Goldilocks`] marker type.
 
 use hdl_cat_bits::Bits;
 use hdl_cat_circuit::{CircuitTensor, Obj};
@@ -30,10 +32,9 @@ use hdl_cat_ir::{BinOp, HdlGraphBuilder, Op, WireId, WireTy};
 use hdl_cat_kind::BitSeq;
 use hdl_cat_sync::Sync;
 
-use crate::hdl::common::{
-    u64_to_bitseq, u128_to_bitseq, zeros_32_bitseq, zeros_64_bitseq,
-    GOLDILOCKS_PRIME_U64, GOLDILOCKS_PRIME_U128,
-};
+use crate::hdl::common::GOLDILOCKS_PRIME_U64;
+use crate::hdl::field_hdl::PrimeFieldHdl;
+use crate::hdl::goldilocks_field_hdl::Goldilocks;
 
 /// Counter width used by the SDF phase logic.  Supports depths up to 2^24.
 pub const COUNTER_BITS: usize = 24;
@@ -60,386 +61,6 @@ pub type SdfStageState = Obj<GoldilocksElement>;
 /// A parametric SDF stage as a sync machine.
 pub type SdfStageSync = Sync<SdfStageState, SdfStageInput, SdfStageOutput>;
 
-// ── Shared arithmetic constants ──────────────────────────────────────
-
-/// Constant wire handles shared by the inline modular arithmetic helpers.
-struct ArithConstants {
-    p_64: WireId,
-    wrap_corr_64: WireId,
-    one_64: WireId,
-    p_128: WireId,
-    two_p_128: WireId,
-    corr_128: WireId,
-    zero_128: WireId,
-    carry_96_const: WireId,
-    zeros_32: WireId,
-    zeros_64: WireId,
-}
-
-/// Allocate and emit all constant wires used by the inline arithmetic.
-fn alloc_constants(bld: HdlGraphBuilder) -> Result<(HdlGraphBuilder, ArithConstants), Error> {
-    let p = GOLDILOCKS_PRIME_U128;
-
-    let (bld, p_64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, wrap_corr_64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, one_64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, p_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, two_p_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, corr_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, zero_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, carry_96_const) = bld.with_wire(WireTy::Bits(128));
-    let (bld, zeros_32) = bld.with_wire(WireTy::Bits(32));
-    let (bld, zeros_64) = bld.with_wire(WireTy::Bits(64));
-
-    let bld = bld.with_instruction(
-        Op::Const { bits: u64_to_bitseq(GOLDILOCKS_PRIME_U64), ty: WireTy::Bits(64) },
-        vec![], p_64,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Const { bits: u64_to_bitseq(0xFFFF_FFFF), ty: WireTy::Bits(64) },
-        vec![], wrap_corr_64,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Const { bits: u64_to_bitseq(1), ty: WireTy::Bits(64) },
-        vec![], one_64,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(p), ty: WireTy::Bits(128) },
-        vec![], p_128,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(2 * p), ty: WireTy::Bits(128) },
-        vec![], two_p_128,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(0xFFFF_FFFF), ty: WireTy::Bits(128) },
-        vec![], corr_128,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(0), ty: WireTy::Bits(128) },
-        vec![], zero_128,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(1_u128 << 96), ty: WireTy::Bits(128) },
-        vec![], carry_96_const,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Const { bits: zeros_32_bitseq(), ty: WireTy::Bits(32) },
-        vec![], zeros_32,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Const { bits: zeros_64_bitseq(), ty: WireTy::Bits(64) },
-        vec![], zeros_64,
-    )?;
-
-    Ok((bld, ArithConstants {
-        p_64, wrap_corr_64, one_64,
-        p_128, two_p_128, corr_128, zero_128,
-        carry_96_const, zeros_32, zeros_64,
-    }))
-}
-
-// ── Inline modular arithmetic helpers ────────────────────────────────
-
-/// Compute `(a + b) mod p` inline, returning the output wire.
-fn inline_mod_add(
-    bld: HdlGraphBuilder, a: WireId, b: WireId, c: &ArithConstants,
-) -> Result<(HdlGraphBuilder, WireId), Error> {
-    let (bld, sum64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, add_overflow) = bld.with_wire(WireTy::Bit);
-    let (bld, sum_plus_wrap) = bld.with_wire(WireTy::Bits(64));
-    let (bld, sum_lt_prime) = bld.with_wire(WireTy::Bit);
-    let (bld, sum_ge_prime) = bld.with_wire(WireTy::Bit);
-    let (bld, sum_minus_prime) = bld.with_wire(WireTy::Bits(64));
-    let (bld, temp_adj) = bld.with_wire(WireTy::Bits(64));
-    let (bld, adjusted) = bld.with_wire(WireTy::Bits(64));
-    let (bld, adj_lt_prime) = bld.with_wire(WireTy::Bit);
-    let (bld, adj_ge_prime) = bld.with_wire(WireTy::Bit);
-    let (bld, adj_minus_prime) = bld.with_wire(WireTy::Bits(64));
-    let (bld, result) = bld.with_wire(WireTy::Bits(64));
-
-    let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![a, b], sum64)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![sum64, a], add_overflow)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![sum64, c.wrap_corr_64], sum_plus_wrap)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![sum64, c.p_64], sum_lt_prime)?;
-    let bld = bld.with_instruction(Op::Not, vec![sum_lt_prime], sum_ge_prime)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![sum64, c.p_64], sum_minus_prime)?;
-    let bld = bld.with_instruction(Op::Mux, vec![sum_ge_prime, sum64, sum_minus_prime], temp_adj)?;
-    let bld = bld.with_instruction(Op::Mux, vec![add_overflow, temp_adj, sum_plus_wrap], adjusted)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![adjusted, c.p_64], adj_lt_prime)?;
-    let bld = bld.with_instruction(Op::Not, vec![adj_lt_prime], adj_ge_prime)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![adjusted, c.p_64], adj_minus_prime)?;
-    let bld = bld.with_instruction(Op::Mux, vec![adj_ge_prime, adjusted, adj_minus_prime], result)?;
-
-    Ok((bld, result))
-}
-
-/// Compute `(a - b) mod p` inline, returning the output wire.
-fn inline_mod_sub(
-    bld: HdlGraphBuilder, a: WireId, b: WireId, c: &ArithConstants,
-) -> Result<(HdlGraphBuilder, WireId), Error> {
-    let (bld, diff64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, underflow) = bld.with_wire(WireTy::Bit);
-    let (bld, diff_minus_corr) = bld.with_wire(WireTy::Bits(64));
-    let (bld, result) = bld.with_wire(WireTy::Bits(64));
-
-    let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![a, b], diff64)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![a, b], underflow)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![diff64, c.wrap_corr_64], diff_minus_corr)?;
-    let bld = bld.with_instruction(Op::Mux, vec![underflow, diff64, diff_minus_corr], result)?;
-
-    Ok((bld, result))
-}
-
-/// Compute `(a * b) mod p` inline via schoolbook 32x32 partial products
-/// and Solinas reduction.  Returns the 64-bit result wire.
-#[allow(clippy::too_many_lines)]
-fn inline_mul_reduce(
-    bld: HdlGraphBuilder, a: WireId, b: WireId, c: &ArithConstants,
-) -> Result<(HdlGraphBuilder, WireId), Error> {
-    // ── Split into 32-bit halves ─────────────────────────────────────
-    let (bld, a_lo) = bld.with_wire(WireTy::Bits(32));
-    let (bld, a_hi) = bld.with_wire(WireTy::Bits(32));
-    let (bld, b_lo) = bld.with_wire(WireTy::Bits(32));
-    let (bld, b_hi) = bld.with_wire(WireTy::Bits(32));
-    let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 32 }, vec![a], a_lo)?;
-    let bld = bld.with_instruction(Op::Slice { lo: 32, hi: 64 }, vec![a], a_hi)?;
-    let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 32 }, vec![b], b_lo)?;
-    let bld = bld.with_instruction(Op::Slice { lo: 32, hi: 64 }, vec![b], b_hi)?;
-
-    // ── Zero-extend to 64 bits ───────────────────────────────────────
-    let (bld, a_lo_64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, a_hi_64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, b_lo_64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, b_hi_64) = bld.with_wire(WireTy::Bits(64));
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![a_lo, c.zeros_32], a_lo_64,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![a_hi, c.zeros_32], a_hi_64,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![b_lo, c.zeros_32], b_lo_64,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![b_hi, c.zeros_32], b_hi_64,
-    )?;
-
-    // ── Four partial products (32x32 -> 64, exact) ───────────────────
-    let (bld, pp0) = bld.with_wire(WireTy::Bits(64));
-    let (bld, pp1) = bld.with_wire(WireTy::Bits(64));
-    let (bld, pp2) = bld.with_wire(WireTy::Bits(64));
-    let (bld, pp3) = bld.with_wire(WireTy::Bits(64));
-    let bld = bld.with_instruction(Op::Bin(BinOp::Mul), vec![a_lo_64, b_lo_64], pp0)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Mul), vec![a_lo_64, b_hi_64], pp1)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Mul), vec![a_hi_64, b_lo_64], pp2)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Mul), vec![a_hi_64, b_hi_64], pp3)?;
-
-    // ── Assemble 128-bit product: p0 + (p1+p2)<<32 + p3<<64 ─────────
-    let (bld, cross_64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, cross_carry) = bld.with_wire(WireTy::Bit);
-    let (bld, cross_lo_32) = bld.with_wire(WireTy::Bits(32));
-    let (bld, cross_hi_32) = bld.with_wire(WireTy::Bits(32));
-    let (bld, cross_lo_shifted_64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, cross_lo_shifted_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, cross_hi_64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, cross_hi_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, pp0_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, pp3_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, carry_contrib) = bld.with_wire(WireTy::Bits(128));
-    let (bld, prod_s1) = bld.with_wire(WireTy::Bits(128));
-    let (bld, prod_s2) = bld.with_wire(WireTy::Bits(128));
-    let (bld, prod_s3) = bld.with_wire(WireTy::Bits(128));
-    let (bld, product_128) = bld.with_wire(WireTy::Bits(128));
-
-    // cross = p1 + p2 (64-bit wrapping; detect carry)
-    let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![pp1, pp2], cross_64)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![cross_64, pp1], cross_carry)?;
-    let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 32 }, vec![cross_64], cross_lo_32)?;
-    let bld = bld.with_instruction(Op::Slice { lo: 32, hi: 64 }, vec![cross_64], cross_hi_32)?;
-
-    // cross_lo << 32 as 128-bit
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 },
-        vec![c.zeros_32, cross_lo_32], cross_lo_shifted_64,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 },
-        vec![cross_lo_shifted_64, c.zeros_64], cross_lo_shifted_128,
-    )?;
-
-    // cross_hi at bits 64..96
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 },
-        vec![cross_hi_32, c.zeros_32], cross_hi_64,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 },
-        vec![c.zeros_64, cross_hi_64], cross_hi_128,
-    )?;
-
-    // Extend pp0 and pp3 to 128 bits
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 },
-        vec![pp0, c.zeros_64], pp0_128,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 },
-        vec![c.zeros_64, pp3], pp3_128,
-    )?;
-
-    // Carry contribution: if cross overflowed, add 1<<96
-    let bld = bld.with_instruction(
-        Op::Mux, vec![cross_carry, c.zero_128, c.carry_96_const], carry_contrib,
-    )?;
-
-    // Assemble product
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Add), vec![pp0_128, cross_lo_shifted_128], prod_s1,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Add), vec![prod_s1, cross_hi_128], prod_s2,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Add), vec![prod_s2, pp3_128], prod_s3,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Add), vec![prod_s3, carry_contrib], product_128,
-    )?;
-
-    // ── Solinas reduction ────────────────────────────────────────────
-    let (bld, r_a0) = bld.with_wire(WireTy::Bits(32));
-    let (bld, r_a1) = bld.with_wire(WireTy::Bits(32));
-    let (bld, r_a2) = bld.with_wire(WireTy::Bits(32));
-    let (bld, r_a3) = bld.with_wire(WireTy::Bits(32));
-    let (bld, r_a1_64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, r_a2_64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, r_a3_64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, r_a1_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_a2_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_a2_ext_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_a3_ext_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_cross_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_cross_lo) = bld.with_wire(WireTy::Bits(32));
-    let (bld, r_cross_carry_32) = bld.with_wire(WireTy::Bits(32));
-    let (bld, r_cross_carry_bit) = bld.with_wire(WireTy::Bit);
-    let (bld, r_partial_64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, r_partial_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_carry_corr) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_acc1) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_acc2) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_acc3) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_acc4) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_lt_2p) = bld.with_wire(WireTy::Bit);
-    let (bld, r_ge_2p) = bld.with_wire(WireTy::Bit);
-    let (bld, r_step1_sub) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_step1) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_below_p) = bld.with_wire(WireTy::Bit);
-    let (bld, r_at_least_p) = bld.with_wire(WireTy::Bit);
-    let (bld, r_step2_sub) = bld.with_wire(WireTy::Bits(128));
-    let (bld, r_result_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, result) = bld.with_wire(WireTy::Bits(64));
-
-    // Extract 32-bit limbs from the 128-bit product
-    let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 32 }, vec![product_128], r_a0)?;
-    let bld = bld.with_instruction(Op::Slice { lo: 32, hi: 64 }, vec![product_128], r_a1)?;
-    let bld = bld.with_instruction(Op::Slice { lo: 64, hi: 96 }, vec![product_128], r_a2)?;
-    let bld = bld.with_instruction(Op::Slice { lo: 96, hi: 128 }, vec![product_128], r_a3)?;
-
-    // Zero-extend limbs to 128 bits
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![r_a1, c.zeros_32], r_a1_64,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![r_a1_64, c.zeros_64], r_a1_128,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![r_a2, c.zeros_32], r_a2_64,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![r_a2_64, c.zeros_64], r_a2_128,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![r_a2_64, c.zeros_64], r_a2_ext_128,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![r_a3, c.zeros_32], r_a3_64,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![r_a3_64, c.zeros_64], r_a3_ext_128,
-    )?;
-
-    // cross = a1 + a2 (128-bit exact)
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Add), vec![r_a1_128, r_a2_128], r_cross_128,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Slice { lo: 0, hi: 32 }, vec![r_cross_128], r_cross_lo,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Slice { lo: 32, hi: 64 }, vec![r_cross_128], r_cross_carry_32,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Slice { lo: 0, hi: 1 }, vec![r_cross_carry_32], r_cross_carry_bit,
-    )?;
-
-    // partial = Concat(a0, cross_lo)
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![r_a0, r_cross_lo], r_partial_64,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![r_partial_64, c.zeros_64], r_partial_128,
-    )?;
-
-    // Carry correction: if cross overflowed, add 2^32 - 1
-    let bld = bld.with_instruction(
-        Op::Mux, vec![r_cross_carry_bit, c.zero_128, c.corr_128], r_carry_corr,
-    )?;
-
-    // Accumulate with bias (add p to keep positive through subtractions)
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Add), vec![r_partial_128, r_carry_corr], r_acc1,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Add), vec![r_acc1, c.p_128], r_acc2,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Sub), vec![r_acc2, r_a2_ext_128], r_acc3,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Sub), vec![r_acc3, r_a3_ext_128], r_acc4,
-    )?;
-
-    // Normalise: at most two conditional subtractions of p
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Lt), vec![r_acc4, c.two_p_128], r_lt_2p,
-    )?;
-    let bld = bld.with_instruction(Op::Not, vec![r_lt_2p], r_ge_2p)?;
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Sub), vec![r_acc4, c.p_128], r_step1_sub,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Mux, vec![r_ge_2p, r_acc4, r_step1_sub], r_step1,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Lt), vec![r_step1, c.p_128], r_below_p,
-    )?;
-    let bld = bld.with_instruction(Op::Not, vec![r_below_p], r_at_least_p)?;
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Sub), vec![r_step1, c.p_128], r_step2_sub,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Mux, vec![r_at_least_p, r_step1, r_step2_sub], r_result_128,
-    )?;
-
-    // Extract low 64 bits
-    let bld = bld.with_instruction(
-        Op::Slice { lo: 0, hi: 64 }, vec![r_result_128], result,
-    )?;
-
-    Ok((bld, result))
-}
-
 // ── Counter helper ───────────────────────────────────────────────────
 
 /// Create a [`COUNTER_BITS`]-wide [`BitSeq`] from a `u32`.
@@ -451,22 +72,27 @@ fn counter_to_bitseq(val: u32) -> BitSeq {
 
 // ── SDF stage constructor ────────────────────────────────────────────
 
-/// Construct an SDF stage with the given delay depth.
+/// Construct a field-generic SDF stage with the given delay depth.
 ///
 /// The stage implements the SDF algorithm with fill and butterfly phases,
 /// coordinated by an internal counter.  The delay line is a D-deep shift
-/// register.  All modular arithmetic (add, sub, 64x64 multiply-reduce)
-/// is inlined as combinational logic.
+/// register.  Modular arithmetic (add, sub, multiply-reduce) is supplied
+/// by the [`PrimeFieldHdl`] implementation, making this constructor
+/// field-generic.
+///
+/// # Type parameters
+///
+/// * `F` - The prime field HDL implementation.
 ///
 /// # Arguments
 ///
-/// * `depth` - The delay depth for this stage (must be >= 1)
+/// * `depth` - The delay depth for this stage (must be >= 1).
 ///
 /// # Errors
 ///
 /// Returns [`Error`] if `depth` is zero or IR construction fails.
 #[allow(clippy::too_many_lines)]
-pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
+pub fn sdf_stage_generic<F: PrimeFieldHdl>(depth: usize) -> Result<SdfStageSync, Error> {
     if depth == 0 {
         return Err(Error::WidthMismatch {
             expected: hdl_cat_error::Width::new(1),
@@ -475,24 +101,26 @@ pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
     }
 
     let counter_bits = u32::try_from(COUNTER_BITS).unwrap_or(16);
+    let elem_width = F::element_width();
+    let elem_ty = F::element_wire_ty();
 
     // ── Source wire allocation ────────────────────────────────────────
     // State wires: delay_arr (Array), twiddle, counter
-    let delay_ty = WireTy::Array { element_width: 64, depth };
+    let delay_ty = WireTy::Array { element_width: elem_width, depth };
     let (bld, delay_arr) = HdlGraphBuilder::new().with_wire(delay_ty.clone());
 
-    let (bld, twiddle) = bld.with_wire(WireTy::Bits(64));
+    let (bld, twiddle) = bld.with_wire(elem_ty.clone());
     let (bld, counter) = bld.with_wire(WireTy::Bits(counter_bits));
 
     // Data input wires
-    let (bld, data_in) = bld.with_wire(WireTy::Bits(64));
+    let (bld, data_in) = bld.with_wire(elem_ty.clone());
     let (bld, valid_in) = bld.with_wire(WireTy::Bit);
-    let (bld, step_root) = bld.with_wire(WireTy::Bits(64));
+    let (bld, step_root) = bld.with_wire(elem_ty.clone());
 
     // ── Shared constants ─────────────────────────────────────────────
-    let (bld, arith) = alloc_constants(bld)?;
+    let (bld, arith) = F::alloc_constants(bld)?;
 
-    // ── Counter constants (16-bit) ───────────────────────────────────
+    // ── Counter constants ────────────────────────────────────────────
     let depth_u32 = u32::try_from(depth).map_err(|_| Error::Overflow {
         width: hdl_cat_error::Width::new(u32::MAX),
     })?;
@@ -533,25 +161,25 @@ pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
     let bld = bld.with_instruction(Op::Not, vec![counter_lt_depth], phase)?;
 
     // ── Read delayed value (tail of array) ────────────────────────────
-    let (bld, delayed) = bld.with_wire(WireTy::Bits(64));
+    let (bld, delayed) = bld.with_wire(elem_ty.clone());
     let bld = bld.with_instruction(
-        Op::ArrayTail { element_width: 64, depth },
+        Op::ArrayTail { element_width: elem_width, depth },
         vec![delay_arr],
         delayed,
     )?;
 
     // ── Butterfly arithmetic (always computed; muxed by phase) ────────
-    let (bld, upper) = inline_mod_add(bld, delayed, data_in, &arith)?;
-    let (bld, diff) = inline_mod_sub(bld, delayed, data_in, &arith)?;
-    let (bld, lower) = inline_mul_reduce(bld, diff, twiddle, &arith)?;
+    let (bld, upper) = F::inline_add(bld, delayed, data_in, &arith)?;
+    let (bld, diff) = F::inline_sub(bld, delayed, data_in, &arith)?;
+    let (bld, lower) = F::inline_mul_reduce(bld, diff, twiddle, &arith)?;
 
     // ── Twiddle advancement ──────────────────────────────────────────
-    let (bld, twiddle_stepped) = inline_mul_reduce(bld, twiddle, step_root, &arith)?;
+    let (bld, twiddle_stepped) = F::inline_mul_reduce(bld, twiddle, step_root, &arith)?;
 
     // ── Phase-dependent muxing ───────────────────────────────────────
     // data_out: fill -> delayed (R2SDF: drain previous upper from delay),
     //           butterfly -> lower
-    let (bld, data_out) = bld.with_wire(WireTy::Bits(64));
+    let (bld, data_out) = bld.with_wire(elem_ty.clone());
     let bld = bld.with_instruction(
         Op::Mux, vec![phase, delayed, lower], data_out,
     )?;
@@ -563,15 +191,15 @@ pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
     )?;
 
     // delay_in: fill -> data_in, butterfly -> upper
-    let (bld, delay_in) = bld.with_wire(WireTy::Bits(64));
+    let (bld, delay_in) = bld.with_wire(elem_ty.clone());
     let bld = bld.with_instruction(
         Op::Mux, vec![phase, data_in, upper], delay_in,
     )?;
 
     // next_twiddle: fill -> 1, butterfly -> twiddle * step_root
-    let (bld, next_twiddle) = bld.with_wire(WireTy::Bits(64));
+    let (bld, next_twiddle) = bld.with_wire(elem_ty);
     let bld = bld.with_instruction(
-        Op::Mux, vec![phase, arith.one_64, twiddle_stepped], next_twiddle,
+        Op::Mux, vec![phase, F::one_wire(&arith), twiddle_stepped], next_twiddle,
     )?;
 
     // ── Counter logic ────────────────────────────────────────────────
@@ -593,7 +221,7 @@ pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
     // ── Delay line: shift in via ArrayShiftIn ──────────────────────────
     let (bld, next_delay_arr) = bld.with_wire(delay_ty);
     let bld = bld.with_instruction(
-        Op::ArrayShiftIn { element_width: 64, depth },
+        Op::ArrayShiftIn { element_width: elem_width, depth },
         vec![delay_arr, delay_in],
         next_delay_arr,
     )?;
@@ -619,10 +247,11 @@ pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
     let state_wire_count = 3; // array + twiddle + counter
 
     // Initial state (compact): delay element = 0, twiddle = 1, counter = 0
+    let width = usize::try_from(elem_width).unwrap_or(64);
     let initial_state = BitSeq::from_vec(
-        (0..64).map(|_| false)                   // delay element reset (compact)
-            .chain(core::iter::once(true))        // twiddle bit 0 = 1
-            .chain((1..64).map(|_| false))        // twiddle remaining bits
+        (0..width).map(|_| false)                    // delay element reset (compact)
+            .chain(core::iter::once(true))           // twiddle bit 0 = 1
+            .chain((1..width).map(|_| false))        // twiddle remaining bits
             .chain((0..COUNTER_BITS).map(|_| false)) // counter: zero
             .collect(),
     );
@@ -630,6 +259,23 @@ pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
     Ok(hdl_cat_sync::machine::from_raw(
         graph, input_wires, output_wires, initial_state, state_wire_count,
     ))
+}
+
+/// Construct a Goldilocks-flavoured SDF stage with the given delay depth.
+///
+/// This is a convenience wrapper around [`sdf_stage_generic`] that
+/// instantiates the field-generic stage with the [`Goldilocks`] marker
+/// type, giving callers the default 64-bit Goldilocks arithmetic.
+///
+/// # Arguments
+///
+/// * `depth` - The delay depth for this stage (must be >= 1).
+///
+/// # Errors
+///
+/// Returns [`Error`] if `depth` is zero or IR construction fails.
+pub fn sdf_stage(depth: usize) -> Result<SdfStageSync, Error> {
+    sdf_stage_generic::<Goldilocks>(depth)
 }
 
 /// Create a depth-2 SDF stage (for testing).
