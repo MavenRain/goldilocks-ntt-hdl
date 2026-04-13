@@ -11,7 +11,7 @@
 
 use hdl_cat_circuit::{CircuitArrow, Obj};
 use hdl_cat_error::Error;
-use hdl_cat_ir::{HdlGraphBuilder, Op, WireId, WireTy};
+use hdl_cat_ir::{HdlGraphBuilder, Op, WireTy};
 use hdl_cat_kind::BitSeq;
 use hdl_cat_sync::Sync;
 
@@ -56,13 +56,12 @@ where
     Sync::from_arrow(arrow, initial_state)
 }
 
-/// Create an N-cycle delay by building an N-element shift register.
+/// Create an N-cycle delay using a single Array-typed state wire.
 ///
-/// The shift register is implemented as pure wire routing: no IR
-/// instructions are needed because the Sync machine's state-thread
-/// mechanism performs the shifting.  On each cycle the data input
-/// enters position 0, every element moves up one slot, and the
-/// element at position N-1 is emitted as the output.
+/// The delay line is represented as one `WireTy::Array` wire with
+/// `depth = n` and `element_width = 64`.  On each cycle,
+/// [`Op::ArrayShiftIn`] pushes the data input into position 0 and
+/// [`Op::ArrayTail`] reads the oldest element from position `n-1`.
 ///
 /// # Errors
 ///
@@ -72,7 +71,7 @@ where
     T: Clone + Default + hdl_cat_kind::Hw + hdl_cat_circuit::object::Scalar,
 {
     if n == 0 {
-        // 0-cycle delay is just a pass-through (identity)
+        // 0-cycle delay is just a pass-through (identity).
         let (bld, input) = HdlGraphBuilder::new().with_wire(WireTy::Bits(64));
         let initial_bits: Vec<bool> = (0..64).map(|_| false).collect();
         let initial_state = BitSeq::from_vec(initial_bits);
@@ -80,73 +79,54 @@ where
         let arrow: CircuitArrow<Obj<T>, Obj<T>> = CircuitArrow::from_raw_parts(
             bld.build(),
             vec![input],
-            vec![input], // pass-through: output = input
+            vec![input],
         );
 
         Sync::from_arrow(arrow, initial_state)
     } else {
-            // N-cycle shift register with identity instructions.
-            //
-            // Wire layout (all 64-bit):
-            //   wires 0..n-1     = state registers (s_0 .. s_{n-1})
-            //   wire  n          = data input (d_in)
-            //   wires n+1..2n    = next-state copies (computed by instructions)
-            //   wire  2n+1       = output copy
-            //
-            // Identity instructions (Slice 0..64) implement the shift:
-            //   wire n+1 = copy(d_in)      → next_state[0]
-            //   wire n+2 = copy(s_0)       → next_state[1]
-            //   ...
-            //   wire 2n  = copy(s_{n-2})   → next_state[n-1]
-            //   wire 2n+1 = copy(s_{n-1})  → data_out
-            let bit_width = 64u32;
+        // Wire layout:
+        //   w0 = state array (Array { element_width: 64, depth: n })
+        //   w1 = data input (Bits(64))
+        //   w2 = next-state array (ArrayShiftIn output)
+        //   w3 = data output (ArrayTail output, Bits(64))
+        let arr_ty = WireTy::Array { element_width: 64, depth: n };
+        let (bld, arr_state) = HdlGraphBuilder::new().with_wire(arr_ty.clone());
+        let (bld, data_in) = bld.with_wire(WireTy::Bits(64));
+        let (bld, next_arr) = bld.with_wire(arr_ty);
+        let (bld, data_out) = bld.with_wire(WireTy::Bits(64));
 
-            // Allocate n+1 source wires + n+1 destination wires
-            let bld = (0..(2 * n + 2)).fold(HdlGraphBuilder::new(), |b, _| {
-                b.with_wire(WireTy::Bits(bit_width)).0
-            });
+        // next_arr = shift_in(arr_state, data_in)
+        let bld = bld.with_instruction(
+            Op::ArrayShiftIn { element_width: 64, depth: n },
+            vec![arr_state, data_in],
+            next_arr,
+        )?;
+        // data_out = arr_state[n - 1]
+        let bld = bld.with_instruction(
+            Op::ArrayTail { element_width: 64, depth: n },
+            vec![arr_state],
+            data_out,
+        )?;
 
-            // Identity copy: next_state[0] = data_in
-            let bld = bld.with_instruction(
-                Op::Slice { lo: 0, hi: 64 },
-                vec![WireId::new(n)],
-                WireId::new(n + 1),
-            )?;
+        let graph = bld.build();
 
-            // Identity copies: next_state[i] = s_{i-1}
-            let bld = (1..n).try_fold(bld, |b, i| {
-                b.with_instruction(
-                    Op::Slice { lo: 0, hi: 64 },
-                    vec![WireId::new(i - 1)],
-                    WireId::new(n + 1 + i),
-                )
-            })?;
+        // State: [arr_state], Data: [data_in]
+        // Next-state: [next_arr], Data out: [data_out]
+        let input_wires = vec![arr_state, data_in];
+        let output_wires = vec![next_arr, data_out];
 
-            // Identity copy: output = s_{n-1}
-            let bld = bld.with_instruction(
-                Op::Slice { lo: 0, hi: 64 },
-                vec![WireId::new(n - 1)],
-                WireId::new(2 * n + 1),
-            )?;
+        // Compact initial state: one element's worth of zeros (64 bits).
+        let initial_state = BitSeq::from_vec(
+            (0..64).map(|_| false).collect(),
+        );
 
-            let graph = bld.build();
-
-            let input_wires: Vec<WireId> = (0..=n).map(WireId::new).collect();
-
-            // Output wires point to instruction-computed destinations
-            let output_wires: Vec<WireId> = (0..=n).map(|i| WireId::new(n + 1 + i)).collect();
-
-            let initial_state = BitSeq::from_vec(
-                (0..64 * n).map(|_| false).collect(),
-            );
-
-            Ok(hdl_cat_sync::machine::from_raw(
-                graph,
-                input_wires,
-                output_wires,
-                initial_state,
-                n,
-            ))
+        Ok(hdl_cat_sync::machine::from_raw(
+            graph,
+            input_wires,
+            output_wires,
+            initial_state,
+            1, // 1 state wire (the array)
+        ))
     }
 }
 
