@@ -20,7 +20,6 @@ pub mod goldilocks_field_hdl;
 pub mod goldilocks_reduce;
 pub mod pipeline;
 pub mod stage;
-pub mod twiddle;
 
 // Re-export key types and functions
 pub use arithmetic::{
@@ -33,6 +32,5 @@ pub use delay::delay_n;
 pub use goldilocks_reduce::{goldilocks_reduce_arrow, goldilocks_mul_reduce_arrow};
 pub use pipeline::{size_4_pipeline, emit_size_4_pipeline_verilog};
 pub use stage::{sdf_stage, sdf_stage_depth_1, sdf_stage_depth_2};
-pub use twiddle::twiddle_accumulator;
 pub use field_hdl::PrimeFieldHdl;
 pub use goldilocks_field_hdl::{Goldilocks, GoldilocksConstants};

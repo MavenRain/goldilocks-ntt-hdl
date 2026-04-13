@@ -13,10 +13,12 @@
 use hdl_cat_bits::Bits;
 use hdl_cat_circuit::{CircuitArrow, CircuitTensor, Obj};
 use hdl_cat_error::Error;
-use hdl_cat_ir::{BinOp, HdlGraphBuilder, Op, WireTy};
+use hdl_cat_ir::HdlGraphBuilder;
 use hdl_cat_sync::{compose_sync, par_sync, Sync};
 
 use crate::hdl::delay::delay_n;
+use crate::hdl::field_hdl::PrimeFieldHdl;
+use crate::hdl::goldilocks_field_hdl::Goldilocks;
 use crate::hdl::goldilocks_reduce::goldilocks_mul_reduce_arrow;
 
 /// Total butterfly latency in clock cycles.
@@ -57,66 +59,21 @@ type ForkOutput = CircuitTensor<
 ///
 /// Returns [`Error`] if IR construction fails.
 fn build_fork_circuit() -> Result<CircuitArrow<ButterflyInput, ForkOutput>, Error> {
-    let p_val = crate::hdl::common::GOLDILOCKS_PRIME_U64;
+    let element_ty = Goldilocks::element_wire_ty();
 
     // ── Inputs ───────────────────────────────────────────────────────
-    let (bld, a) = HdlGraphBuilder::new().with_wire(WireTy::Bits(64));
-    let (bld, b) = bld.with_wire(WireTy::Bits(64));
-    let (bld, tw) = bld.with_wire(WireTy::Bits(64));
+    let (bld, a) = HdlGraphBuilder::new().with_wire(element_ty.clone());
+    let (bld, b) = bld.with_wire(element_ty.clone());
+    let (bld, tw) = bld.with_wire(element_ty);
 
-    // ── Constants ────────────────────────────────────────────────────
-    let (bld, prime_wire) = bld.with_wire(WireTy::Bits(64));
-    let (bld, wrap_corr_wire) = bld.with_wire(WireTy::Bits(64));
+    // ── Field constants (via PrimeFieldHdl) ──────────────────────────
+    let (bld, consts) = Goldilocks::alloc_constants(bld)?;
 
-    let bld = bld.with_instruction(
-        Op::Const { bits: crate::hdl::common::u64_to_bitseq(p_val), ty: WireTy::Bits(64) },
-        vec![], prime_wire,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Const { bits: crate::hdl::common::u64_to_bitseq(0xFFFF_FFFF), ty: WireTy::Bits(64) },
-        vec![], wrap_corr_wire,
-    )?;
+    // ── upper = (a + b) mod p ────────────────────────────────────────
+    let (bld, upper) = Goldilocks::inline_add(bld, a, b, &consts)?;
 
-    // ── Modular add: upper = (a + b) mod p ───────────────────────────
-    let (bld, sum64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, add_overflow) = bld.with_wire(WireTy::Bit);
-    let (bld, sum_plus_wrap) = bld.with_wire(WireTy::Bits(64));
-    let (bld, sum_lt_prime) = bld.with_wire(WireTy::Bit);
-    let (bld, sum_ge_prime) = bld.with_wire(WireTy::Bit);
-    let (bld, sum_minus_prime) = bld.with_wire(WireTy::Bits(64));
-    let (bld, temp_adj) = bld.with_wire(WireTy::Bits(64));
-    let (bld, adjusted) = bld.with_wire(WireTy::Bits(64));
-    let (bld, adj_lt_prime) = bld.with_wire(WireTy::Bit);
-    let (bld, adj_ge_prime) = bld.with_wire(WireTy::Bit);
-    let (bld, adj_minus_prime) = bld.with_wire(WireTy::Bits(64));
-    let (bld, upper) = bld.with_wire(WireTy::Bits(64));
-
-    let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![a, b], sum64)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![sum64, a], add_overflow)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![sum64, wrap_corr_wire], sum_plus_wrap)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![sum64, prime_wire], sum_lt_prime)?;
-    let bld = bld.with_instruction(Op::Not, vec![sum_lt_prime], sum_ge_prime)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![sum64, prime_wire], sum_minus_prime)?;
-    // sel=0 (sum < p) → keep sum; sel=1 (sum >= p) → subtract p
-    let bld = bld.with_instruction(Op::Mux, vec![sum_ge_prime, sum64, sum_minus_prime], temp_adj)?;
-    // sel=0 (no overflow) → keep temp_adj; sel=1 (overflow) → use sum_plus_wrap
-    let bld = bld.with_instruction(Op::Mux, vec![add_overflow, temp_adj, sum_plus_wrap], adjusted)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![adjusted, prime_wire], adj_lt_prime)?;
-    let bld = bld.with_instruction(Op::Not, vec![adj_lt_prime], adj_ge_prime)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![adjusted, prime_wire], adj_minus_prime)?;
-    let bld = bld.with_instruction(Op::Mux, vec![adj_ge_prime, adjusted, adj_minus_prime], upper)?;
-
-    // ── Modular sub: diff = (a − b) mod p ────────────────────────────
-    let (bld, diff64) = bld.with_wire(WireTy::Bits(64));
-    let (bld, sub_underflow) = bld.with_wire(WireTy::Bit);
-    let (bld, diff_minus_corr) = bld.with_wire(WireTy::Bits(64));
-    let (bld, diff) = bld.with_wire(WireTy::Bits(64));
-
-    let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![a, b], diff64)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![a, b], sub_underflow)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![diff64, wrap_corr_wire], diff_minus_corr)?;
-    // sel=0 (no underflow) → keep diff; sel=1 (underflow) → use corrected diff
-    let bld = bld.with_instruction(Op::Mux, vec![sub_underflow, diff64, diff_minus_corr], diff)?;
+    // ── diff = (a − b) mod p ─────────────────────────────────────────
+    let (bld, diff) = Goldilocks::inline_sub(bld, a, b, &consts)?;
 
     // ── Output: (upper, diff, tw) ────────────────────────────────────
     Ok(CircuitArrow::from_raw_parts(
