@@ -12,6 +12,7 @@
 //! remains in the pure categorical layer outside this module.
 
 pub mod arithmetic;
+pub mod babybear_field_hdl;
 pub mod butterfly;
 pub mod common;
 pub mod delay;
@@ -26,6 +27,7 @@ pub use arithmetic::{
     goldilocks_add_comb, goldilocks_sub_comb, goldilocks_mul_comb,
     GoldilocksAddArrow, GoldilocksSubArrow, GoldilocksMulArrow,
 };
+pub use babybear_field_hdl::{BabyBear, BabyBearConstants, BABYBEAR_PRIME_U64};
 pub use butterfly::{dif_butterfly, DifButterflySync, BUTTERFLY_LATENCY};
 pub use common::{GoldilocksElement, GOLDILOCKS_PRIME_U64, u64_to_bitseq, bitseq_to_u64};
 pub use delay::delay_n;

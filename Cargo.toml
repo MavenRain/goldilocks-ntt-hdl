@@ -1,23 +1,23 @@
 [package]
 name = "goldilocks-ntt-hdl"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2024"
-description = "2^24-point NTT over the Goldilocks field: SDF pipeline in hdl-cat with comp-cat-rs categorical structure"
+description = "Field-generic NTT pipeline in hdl-cat (Goldilocks + BabyBear) with comp-cat-rs categorical structure"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/MavenRain/goldilocks-ntt-hdl"
 
 [dependencies]
 comp-cat-rs = "0.5"
-hdl-cat = "0.5"
-hdl-cat-bits = "0.2"
-hdl-cat-circuit = "0.2"
-hdl-cat-error = "0.2"
-hdl-cat-ir = "0.2"
-hdl-cat-kind = "0.2"
-hdl-cat-signal = "0.2"
-hdl-cat-sim = "0.2"
-hdl-cat-sync = "0.2"
-hdl-cat-verilog = "0.6"
+hdl-cat = "0.6"
+hdl-cat-bits = "0.3"
+hdl-cat-circuit = "0.3"
+hdl-cat-error = "0.3"
+hdl-cat-ir = "0.3"
+hdl-cat-kind = "0.3"
+hdl-cat-signal = "0.3"
+hdl-cat-sim = "0.3"
+hdl-cat-sync = "0.3"
+hdl-cat-verilog = "0.7"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
