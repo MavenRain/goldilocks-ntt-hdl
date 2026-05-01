@@ -1,7 +1,10 @@
-//! Benchmarks for Goldilocks NTT.
+//! Benchmarks for the field-generic NTT pipeline.
 //!
-//! Measures CPU throughput of the golden model (recursive DIF NTT)
-//! and the hdl-cat cycle-accurate SDF pipeline simulation.
+//! Measures CPU throughput of the `Goldilocks` golden model (recursive
+//! DIF NTT), the `hdl-cat` cycle-accurate SDF pipeline simulation
+//! (`Goldilocks` 2^4), and the field-generic SDF stage simulation
+//! (`BabyBear`, single stage), so the `Goldilocks`-vs-`BabyBear`
+//! comparison is on the same harness.
 //!
 //! ## Reference comparison points
 //!
@@ -20,7 +23,11 @@ use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion
 
 use goldilocks_ntt_hdl::field::element::GoldilocksElement;
 use goldilocks_ntt_hdl::golden::reference::dif_ntt;
+use goldilocks_ntt_hdl::hdl::stage::sdf_stage_generic;
+use goldilocks_ntt_hdl::hdl::{BabyBear, PrimeFieldHdl};
 use goldilocks_ntt_hdl::sim::runner::{simulate_pipeline, SimConfig};
+use hdl_cat_kind::BitSeq;
+use hdl_cat_sim::Testbench;
 
 const LOG_N_LARGE: usize = 24;
 const N_LARGE: usize = 1 << LOG_N_LARGE;
@@ -67,11 +74,44 @@ fn bench_hdl_cat_sim_size_16(c: &mut Criterion) {
     });
 }
 
+/// Benchmark a single field-generic SDF stage simulation over `BabyBear`.
+///
+/// Drives an 8-cycle workload (one fill + one butterfly frame at depth 2)
+/// through `hdl-cat`'s [`Testbench`] using
+/// [`sdf_stage_generic::<BabyBear>`].  Provides a cross-field comparison
+/// data point against the `Goldilocks` 2^4 pipeline simulation, since
+/// the multi-stage `BabyBear` pipeline composition is not yet exposed.
+fn bench_babybear_stage_sim(c: &mut Criterion) {
+    let data: Vec<u64> = vec![100, 200, 300, 400, 500, 600, 700, 800];
+    let step_root: u64 = 3;
+    let inputs: Vec<BitSeq> = data
+        .iter()
+        .map(|d| {
+            BabyBear::to_bitseq(*d)
+                .concat(BitSeq::from_vec(vec![true]))
+                .concat(BabyBear::to_bitseq(step_root))
+        })
+        .collect();
+
+    c.bench_function("hdl_cat_babybear_stage_depth_2", |b| {
+        b.iter_batched(
+            || inputs.clone(),
+            |ins| {
+                black_box(
+                    sdf_stage_generic::<BabyBear>(2)
+                        .map(|stage| Testbench::new(stage).run(ins).run()),
+                )
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
 criterion_group! {
     name = ntt_benches;
     config = Criterion::default()
         .sample_size(10)
         .measurement_time(std::time::Duration::from_secs(30));
-    targets = bench_golden_model_ntt, bench_hdl_cat_sim_size_16
+    targets = bench_golden_model_ntt, bench_hdl_cat_sim_size_16, bench_babybear_stage_sim
 }
 criterion_main!(ntt_benches);

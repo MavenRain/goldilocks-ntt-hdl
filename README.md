@@ -1,9 +1,10 @@
 # goldilocks-ntt-hdl
 
-A 2^24-point Number Theoretic Transform over the Goldilocks field
-(p = 2^64 - 2^32 + 1), implemented as a fully pipelined SDF
-(Single-path Delay Feedback) architecture in `hdl-cat`, with
-compositional pipeline assembly driven by `comp-cat-rs`.
+A field-generic Number Theoretic Transform pipeline in `hdl-cat`, with
+`Goldilocks` (p = 2^64 - 2^32 + 1) and `BabyBear` (p = 2^31 - 2^27 + 1)
+implementations behind a single `PrimeFieldHdl` trait.  The 24-stage
+2^24-point SDF (Single-path Delay Feedback) pipeline is composed via
+`comp-cat-rs` free-category structure.
 
 ## Overview
 
@@ -12,12 +13,20 @@ This crate provides:
 - **Goldilocks field arithmetic**: `GoldilocksElement` newtype with
   modular add, subtract, multiply, negate, exponentiation, and
   inverse.  Roots of unity up to order 2^32.
+- **Field-generic SDF stages via `PrimeFieldHdl`**: the inline modular
+  arithmetic (`alloc_constants`, `inline_add`, `inline_sub`,
+  `inline_mul_reduce`) is abstracted behind a trait so the same SDF
+  stage construction code targets multiple primes.  `Goldilocks` uses
+  the constant-depth Solinas form `2^64 ≡ 2^32 − 1 (mod p)`; `BabyBear`
+  uses a 12-pass cascaded Solinas reduction with `2^31 ≡ 2^27 − 1
+  (mod p)`.
 - **Golden model**: Pure recursive DIF NTT with verified round-trip
-  inverse, bit-reversal permutation.
-- **Categorical pipeline description**: The 24-stage SDF pipeline is
-  a free category graph (`comp_cat_rs::collapse::free_category`).
-  Each stage is an edge; the `interpret()` universal property composes
-  them into a single pipeline descriptor.
+  inverse, bit-reversal permutation (`Goldilocks`-specific).
+- **Categorical pipeline description**: The 24-stage `Goldilocks` SDF
+  pipeline is a free category graph
+  (`comp_cat_rs::collapse::free_category`).  Each stage is an edge; the
+  `interpret()` universal property composes them into a single pipeline
+  descriptor.
 - **`hdl-cat` modules**: `CircuitArrow` and `Sync` machines for modular
   arithmetic (adder, subtractor, 7-cycle pipelined multiplier), DIF
   butterfly, on-the-fly twiddle accumulator, parameterized delay line,
@@ -35,15 +44,16 @@ field/                            hdl/arithmetic/
   roots.rs    (roots of unity)      subtractor.rs (1-cycle)
                                     multiplier.rs (7-cycle)
 golden/                           hdl/
-  reference.rs (recursive DIF NTT)  butterfly.rs  (8-cycle DIF)
-                                    twiddle.rs    (on-the-fly accum)
-graph/                              delay.rs      (circular buffer)
-  ntt_graph.rs (Graph: 25V, 24E)    stage.rs      (SDF fill/butterfly)
-                                    pipeline.rs   (24 composed stages)
-interpret/
-  signal.rs     (StageSignal)     sim/
-  descriptor.rs (SdfStageDescriptor)  runner.rs   (Io-wrapped sim)
-  hdl_morphism.rs (GraphMorphism)
+  reference.rs (recursive DIF NTT)  field_hdl.rs            (PrimeFieldHdl)
+                                    goldilocks_field_hdl.rs (Goldilocks impl)
+graph/                              babybear_field_hdl.rs   (BabyBear impl)
+  ntt_graph.rs (Graph: 25V, 24E)    butterfly.rs  (8-cycle DIF)
+                                    delay.rs      (circular buffer)
+interpret/                          stage.rs      (SDF fill/butterfly)
+  signal.rs     (StageSignal)       pipeline.rs   (24 composed stages)
+  descriptor.rs (SdfStageDescriptor)
+  hdl_morphism.rs (GraphMorphism) sim/
+                                    runner.rs   (Io-wrapped sim)
 ```
 
 **Layer 1** is pure: zero `mut`, combinators only, comp-cat-rs effects.
@@ -142,13 +152,16 @@ cargo doc --no-deps --open
 
 ## Testing
 
-68 tests across three levels:
+131 tests across three levels:
 
-- **Unit tests** (56): field axioms, root of unity properties, graph
+- **Unit tests** (104): field axioms, root of unity properties, graph
   structure, descriptor composition, interpretation correctness,
-  pipeline construction.
-- **Integration tests** (4): golden model round-trip, passthrough
-  preservation, output length matching.
+  pipeline construction, `Goldilocks` and `BabyBear`
+  `PrimeFieldHdl` add / sub / mul-reduce.
+- **Integration tests** (19): golden model round-trip, passthrough
+  preservation, output length matching, hdl arithmetic property tests,
+  and a `BabyBear` cross-field SDF stage smoke test
+  (`tests/babybear_stage.rs`).
 - **Doctests** (8): `GoldilocksElement`, roots, NTT forward/inverse,
   graph path, categorical interpretation, simulation.
 
@@ -166,10 +179,17 @@ against projected FPGA and published GPU numbers.
 cargo bench
 ```
 
-This runs two benchmarks via `criterion`:
+This runs three benchmarks via `criterion`:
 
-- **`golden_dif_ntt_2^24`**: Pure recursive DIF NTT (CPU, single-threaded)
-- **`behavioral_sdf_sim_2^24`**: Behavioral SDF pipeline simulation (CPU)
+- **`golden_dif_ntt_2^24`**: pure recursive `Goldilocks` DIF NTT (CPU,
+  single-threaded).
+- **`hdl_cat_sdf_sim_2^4`**: cycle-accurate `Goldilocks` SDF pipeline
+  simulation at 16 points (the largest size practical without a full
+  testbench cycle budget).
+- **`hdl_cat_babybear_stage_depth_2`**: cycle-accurate single
+  `BabyBear` SDF stage simulation, providing a same-harness
+  cross-field comparison data point until a multi-stage `BabyBear`
+  pipeline is exposed.
 
 ### Reference comparison
 
