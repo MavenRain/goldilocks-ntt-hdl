@@ -400,6 +400,83 @@ pub fn emit_pipeline_verilog(
     Ok(module.flat_map(|m| m.render()))
 }
 
+/// Emit the size-4 pipeline as a time-unrolled Circom template.
+///
+/// Lowers [`size_4_pipeline`] through
+/// [`hdl_cat_circom::emit_unrolled_template`], producing a flat
+/// combinational template with per-cycle input/output buses and
+/// cycle-0 state initialised from the pipeline's `initial_state`.
+///
+/// The unrolled template grows as `O(num_cycles * graph_size)`, so
+/// this is intended for ZK structural verification rather than
+/// production proving at large `num_cycles`.
+///
+/// # Arguments
+///
+/// * `num_cycles` - Number of cycles to unroll (must be >= 1).
+///
+/// # Errors
+///
+/// Returns [`Error`] if pipeline construction fails.  The returned
+/// [`Io`] surfaces emitter errors at run time.
+pub fn emit_size_4_pipeline_circom(
+    num_cycles: usize,
+) -> Result<Io<hdl_cat_error::Error, String>, Error> {
+    let pipeline = size_4_pipeline()?;
+    let (graph, input_wires, output_wires, initial_state, state_wire_count) = pipeline.into_parts();
+
+    let template = hdl_cat_circom::emit_unrolled_template(
+        &graph,
+        "size_4_ntt_pipeline",
+        &input_wires,
+        &output_wires,
+        state_wire_count,
+        &initial_state,
+        num_cycles,
+    );
+
+    Ok(template.flat_map(|t| t.render()))
+}
+
+/// Emit an N-stage pipeline as a time-unrolled Circom template.
+///
+/// Composes the pipeline via [`compose_pipeline`], then lowers it
+/// through [`hdl_cat_circom::emit_unrolled_template`].  Array-typed
+/// state wires (delay lines) are flattened to bit-level signals at
+/// every cycle, with cycle-`k+1` state driven from cycle-`k`'s
+/// next-state outputs.
+///
+/// # Arguments
+///
+/// * `depths` - Delay depth for each stage.
+/// * `num_cycles` - Number of cycles to unroll (must be >= 1).
+/// * `name` - Circom template name.
+///
+/// # Errors
+///
+/// Returns [`Error`] if pipeline construction fails.  The returned
+/// [`Io`] surfaces emitter errors at run time.
+pub fn emit_pipeline_circom(
+    depths: &[usize],
+    num_cycles: usize,
+    name: &str,
+) -> Result<Io<hdl_cat_error::Error, String>, Error> {
+    let pipeline = compose_pipeline(depths)?;
+    let (graph, input_wires, output_wires, initial_state, state_wire_count) = pipeline.into_parts();
+
+    let template = hdl_cat_circom::emit_unrolled_template(
+        &graph,
+        name,
+        &input_wires,
+        &output_wires,
+        state_wire_count,
+        &initial_state,
+        num_cycles,
+    );
+
+    Ok(template.flat_map(|t| t.render()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
