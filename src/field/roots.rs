@@ -6,7 +6,7 @@
 //! NTT of size up to 2^32 requires.
 
 use crate::error::Error;
-use crate::field::element::{GoldilocksElement, GOLDILOCKS_PRIME};
+use crate::field::element::{GOLDILOCKS_PRIME, GoldilocksElement};
 
 /// A known generator of the multiplicative group GF(p)*.
 ///
@@ -59,9 +59,11 @@ pub fn primitive_root_of_unity(k: u32) -> Result<GoldilocksElement, Error> {
 pub fn twiddle_factors(k: u32) -> Result<Vec<GoldilocksElement>, Error> {
     let root = primitive_root_of_unity(k)?;
     let n = 1_usize << k;
-    Ok(std::iter::successors(Some(GoldilocksElement::ONE), |acc| Some(*acc * root))
-        .take(n)
-        .collect())
+    Ok(
+        std::iter::successors(Some(GoldilocksElement::ONE), |acc| Some(*acc * root))
+            .take(n)
+            .collect(),
+    )
 }
 
 #[cfg(test)]

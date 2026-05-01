@@ -9,8 +9,8 @@
 //! implementation.
 
 use goldilocks_ntt_hdl::error::Error;
-use goldilocks_ntt_hdl::hdl::{BabyBear, PrimeFieldHdl, BABYBEAR_PRIME_U64};
 use goldilocks_ntt_hdl::hdl::stage::sdf_stage_generic;
+use goldilocks_ntt_hdl::hdl::{BABYBEAR_PRIME_U64, BabyBear, PrimeFieldHdl};
 use hdl_cat_kind::BitSeq;
 use hdl_cat_sim::Testbench;
 
@@ -26,8 +26,8 @@ fn make_input(data: u64, valid: bool, step_root: u64) -> BitSeq {
 /// Unpack a stage output cycle (32-bit data, 1-bit valid).
 fn read_output(bits: &BitSeq) -> Result<(u64, bool), Error> {
     let (data_bits, valid_bits) = bits.clone().split_at(32);
-    let data = BabyBear::from_bitseq(&data_bits)
-        .map_err(|e| Error::Field(format!("data decode: {e}")))?;
+    let data =
+        BabyBear::from_bitseq(&data_bits).map_err(|e| Error::Field(format!("data decode: {e}")))?;
     let valid = valid_bits.bit(0);
     Ok((data, valid))
 }
@@ -63,22 +63,26 @@ impl RefState {
 
         let (data_out, delay_in, next_tw) = if is_butterfly {
             let upper_u128 = (u128::from(delayed) + u128::from(data_in)) % p;
-            let upper = u64::try_from(upper_u128)
-                .map_err(|e| Error::Field(format!("upper conv: {e}")))?;
+            let upper =
+                u64::try_from(upper_u128).map_err(|e| Error::Field(format!("upper conv: {e}")))?;
             let diff = (u128::from(delayed) + p - u128::from(data_in)) % p;
             let lower_u128 = (diff * u128::from(self.twiddle)) % p;
-            let lower = u64::try_from(lower_u128)
-                .map_err(|e| Error::Field(format!("lower conv: {e}")))?;
+            let lower =
+                u64::try_from(lower_u128).map_err(|e| Error::Field(format!("lower conv: {e}")))?;
             let tw_u128 = (u128::from(self.twiddle) * u128::from(step_root)) % p;
-            let tw = u64::try_from(tw_u128)
-                .map_err(|e| Error::Field(format!("tw conv: {e}")))?;
+            let tw = u64::try_from(tw_u128).map_err(|e| Error::Field(format!("tw conv: {e}")))?;
             (lower, upper, tw)
         } else {
             (delayed, data_in, 1)
         };
 
         let next_delay: Vec<u64> = core::iter::once(delay_in)
-            .chain(self.delay.iter().take(self.depth.saturating_sub(1)).copied())
+            .chain(
+                self.delay
+                    .iter()
+                    .take(self.depth.saturating_sub(1))
+                    .copied(),
+            )
             .collect();
 
         let next_counter = if self.counter == 2 * self.depth - 1 {
@@ -114,12 +118,15 @@ fn fold_reference(depth: usize, data: &[u64], step_root: u64) -> Result<Vec<u64>
 
 #[test]
 fn babybear_depth_1_matches_reference() -> Result<(), Error> {
-    let stage = sdf_stage_generic::<BabyBear>(1)
-        .map_err(|e| Error::Field(format!("build: {e}")))?;
+    let stage =
+        sdf_stage_generic::<BabyBear>(1).map_err(|e| Error::Field(format!("build: {e}")))?;
     let step_root: u64 = 7;
     let data: Vec<u64> = vec![10, 20, 30, 40];
 
-    let inputs: Vec<BitSeq> = data.iter().map(|d| make_input(*d, true, step_root)).collect();
+    let inputs: Vec<BitSeq> = data
+        .iter()
+        .map(|d| make_input(*d, true, step_root))
+        .collect();
     let tb = Testbench::new(stage);
     let results = tb
         .run(inputs)
@@ -134,22 +141,23 @@ fn babybear_depth_1_matches_reference() -> Result<(), Error> {
         .enumerate()
         .try_for_each(|(i, (sample, exp))| {
             let (actual, _) = read_output(sample.value())?;
-            (actual == *exp).then_some(()).ok_or_else(|| {
-                Error::Field(format!(
-                    "cycle {i}: got {actual}, expected {exp}"
-                ))
-            })
+            (actual == *exp)
+                .then_some(())
+                .ok_or_else(|| Error::Field(format!("cycle {i}: got {actual}, expected {exp}")))
         })
 }
 
 #[test]
 fn babybear_depth_2_matches_reference() -> Result<(), Error> {
-    let stage = sdf_stage_generic::<BabyBear>(2)
-        .map_err(|e| Error::Field(format!("build: {e}")))?;
+    let stage =
+        sdf_stage_generic::<BabyBear>(2).map_err(|e| Error::Field(format!("build: {e}")))?;
     let step_root: u64 = 3;
     let data: Vec<u64> = vec![100, 200, 300, 400, 500, 600, 700, 800];
 
-    let inputs: Vec<BitSeq> = data.iter().map(|d| make_input(*d, true, step_root)).collect();
+    let inputs: Vec<BitSeq> = data
+        .iter()
+        .map(|d| make_input(*d, true, step_root))
+        .collect();
     let tb = Testbench::new(stage);
     let results = tb
         .run(inputs)
@@ -164,25 +172,26 @@ fn babybear_depth_2_matches_reference() -> Result<(), Error> {
         .enumerate()
         .try_for_each(|(i, (sample, exp))| {
             let (actual, _) = read_output(sample.value())?;
-            (actual == *exp).then_some(()).ok_or_else(|| {
-                Error::Field(format!(
-                    "cycle {i}: got {actual}, expected {exp}"
-                ))
-            })
+            (actual == *exp)
+                .then_some(())
+                .ok_or_else(|| Error::Field(format!("cycle {i}: got {actual}, expected {exp}")))
         })
 }
 
 #[test]
 fn babybear_depth_1_near_prime_no_overflow() -> Result<(), Error> {
-    let stage = sdf_stage_generic::<BabyBear>(1)
-        .map_err(|e| Error::Field(format!("build: {e}")))?;
+    let stage =
+        sdf_stage_generic::<BabyBear>(1).map_err(|e| Error::Field(format!("build: {e}")))?;
     let p = BABYBEAR_PRIME_U64;
     let step_root: u64 = 1;
     // Values near the prime exercise the modular reduction in
     // both add and sub paths of the butterfly.
     let data: Vec<u64> = vec![p - 1, 1, p - 2, 2];
 
-    let inputs: Vec<BitSeq> = data.iter().map(|d| make_input(*d, true, step_root)).collect();
+    let inputs: Vec<BitSeq> = data
+        .iter()
+        .map(|d| make_input(*d, true, step_root))
+        .collect();
     let tb = Testbench::new(stage);
     let results = tb
         .run(inputs)
@@ -197,10 +206,8 @@ fn babybear_depth_1_near_prime_no_overflow() -> Result<(), Error> {
         .enumerate()
         .try_for_each(|(i, (sample, exp))| {
             let (actual, _) = read_output(sample.value())?;
-            (actual == *exp).then_some(()).ok_or_else(|| {
-                Error::Field(format!(
-                    "cycle {i}: got {actual}, expected {exp}"
-                ))
-            })
+            (actual == *exp)
+                .then_some(())
+                .ok_or_else(|| Error::Field(format!("cycle {i}: got {actual}, expected {exp}")))
         })
 }

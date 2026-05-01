@@ -9,7 +9,7 @@ use comp_cat_rs::collapse::free_category::{Edge, GraphMorphism, Vertex};
 
 use crate::field::element::GoldilocksElement;
 use crate::field::roots::primitive_root_of_unity;
-use crate::graph::ntt_graph::{NttGraph, NTT_STAGES};
+use crate::graph::ntt_graph::{NTT_STAGES, NttGraph};
 use crate::interpret::descriptor::SdfStageDescriptor;
 use crate::interpret::signal::{StageIndex, StageSignal};
 
@@ -77,7 +77,8 @@ impl GraphMorphism<NttGraph> for HdlInterpretation {
 
     fn map_edge(&self, e: Edge) -> SdfStageDescriptor {
         let k = e.index();
-        let twiddle_root = self.twiddle_roots
+        let twiddle_root = self
+            .twiddle_roots
             .get(k)
             .copied()
             .unwrap_or(GoldilocksElement::ONE);
@@ -88,8 +89,8 @@ impl GraphMorphism<NttGraph> for HdlInterpretation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use comp_cat_rs::collapse::free_category::interpret;
     use crate::graph::ntt_graph::full_pipeline_path;
+    use comp_cat_rs::collapse::free_category::interpret;
 
     #[test]
     fn interpretation_produces_24_stages() -> Result<(), crate::error::Error> {

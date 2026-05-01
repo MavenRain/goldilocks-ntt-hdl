@@ -9,9 +9,9 @@ use proptest::prelude::*;
 
 use goldilocks_ntt_hdl::field::element::GoldilocksElement;
 use goldilocks_ntt_hdl::hdl::arithmetic::{
-    goldilocks_add_sync, goldilocks_sub_comb, goldilocks_mul_comb,
+    goldilocks_add_sync, goldilocks_mul_comb, goldilocks_sub_comb,
 };
-use goldilocks_ntt_hdl::hdl::common::{u64_to_bitseq, bitseq_to_u64};
+use goldilocks_ntt_hdl::hdl::common::{bitseq_to_u64, u64_to_bitseq};
 use hdl_cat_sim::Testbench;
 
 const GOLDILOCKS_PRIME: u64 = 0xFFFF_FFFF_0000_0001;

@@ -32,7 +32,7 @@ use hdl_cat_circuit::{CircuitArrow, Obj};
 use hdl_cat_error::Error;
 use hdl_cat_ir::{BinOp, HdlGraphBuilder, Op, WireTy};
 
-use crate::hdl::common::{u128_to_bitseq, GOLDILOCKS_PRIME_U128};
+use crate::hdl::common::{GOLDILOCKS_PRIME_U128, u128_to_bitseq};
 
 /// Type alias for 64-bit Goldilocks field element.
 pub type GoldilocksElement = Bits<64>;
@@ -121,20 +121,36 @@ pub fn goldilocks_reduce_arrow() -> Result<GoldilocksReduceArrow, Error> {
 
     // ── Constants ────────────────────────────────────────────────────
     let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(corr_val), ty: WireTy::Bits(128) },
-        vec![], corr_val_wire,
+        Op::Const {
+            bits: u128_to_bitseq(corr_val),
+            ty: WireTy::Bits(128),
+        },
+        vec![],
+        corr_val_wire,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(p), ty: WireTy::Bits(128) },
-        vec![], p_wire,
+        Op::Const {
+            bits: u128_to_bitseq(p),
+            ty: WireTy::Bits(128),
+        },
+        vec![],
+        p_wire,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(two_p), ty: WireTy::Bits(128) },
-        vec![], two_p_wire,
+        Op::Const {
+            bits: u128_to_bitseq(two_p),
+            ty: WireTy::Bits(128),
+        },
+        vec![],
+        two_p_wire,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(0), ty: WireTy::Bits(128) },
-        vec![], zero_128_wire,
+        Op::Const {
+            bits: u128_to_bitseq(0),
+            ty: WireTy::Bits(128),
+        },
+        vec![],
+        zero_128_wire,
     )?;
 
     // ── Extract 32-bit limbs ─────────────────────────────────────────
@@ -158,43 +174,86 @@ pub fn goldilocks_reduce_arrow() -> Result<GoldilocksReduceArrow, Error> {
     let (bld, zeros_32_w) = bld.with_wire(WireTy::Bits(32));
     let (bld, zeros_64_w) = bld.with_wire(WireTy::Bits(64));
     let bld = bld.with_instruction(
-        Op::Const { bits: crate::hdl::common::zeros_32_bitseq(), ty: WireTy::Bits(32) },
-        vec![], zeros_32_w,
+        Op::Const {
+            bits: crate::hdl::common::zeros_32_bitseq(),
+            ty: WireTy::Bits(32),
+        },
+        vec![],
+        zeros_32_w,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: crate::hdl::common::zeros_64_bitseq(), ty: WireTy::Bits(64) },
-        vec![], zeros_64_w,
+        Op::Const {
+            bits: crate::hdl::common::zeros_64_bitseq(),
+            ty: WireTy::Bits(64),
+        },
+        vec![],
+        zeros_64_w,
     )?;
 
     // a1_64 = Concat(low=a1, high=zeros_32) → 64 bits
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![a1, zeros_32_w], a1_64,
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![a1, zeros_32_w],
+        a1_64,
     )?;
     // a1_128 = Concat(low=a1_64, high=zeros_64) → 128 bits
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![a1_64, zeros_64_w], a1_128,
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![a1_64, zeros_64_w],
+        a1_128,
     )?;
 
     // a2 → 64 → 128
     let (bld, a2_64) = bld.with_wire(WireTy::Bits(64));
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![a2, zeros_32_w], a2_64,
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![a2, zeros_32_w],
+        a2_64,
     )?;
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![a2_64, zeros_64_w], a2_128,
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![a2_64, zeros_64_w],
+        a2_128,
     )?;
     // Copy for subtraction (same value, separate wire for clarity)
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![a2_64, zeros_64_w], a2_ext_128,
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![a2_64, zeros_64_w],
+        a2_ext_128,
     )?;
 
     // a3 → 64 → 128
     let (bld, a3_64) = bld.with_wire(WireTy::Bits(64));
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![a3, zeros_32_w], a3_64,
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![a3, zeros_32_w],
+        a3_64,
     )?;
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![a3_64, zeros_64_w], a3_ext_128,
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![a3_64, zeros_64_w],
+        a3_ext_128,
     )?;
 
     // ── cross = a1 + a2 (128-bit, exact) ─────────────────────────────
@@ -204,23 +263,43 @@ pub fn goldilocks_reduce_arrow() -> Result<GoldilocksReduceArrow, Error> {
     let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 32 }, vec![cross_128], cross_lo)?;
 
     // cross_carry = cross[32:64] (carry region; only bit 32 can be set)
-    let bld = bld.with_instruction(Op::Slice { lo: 32, hi: 64 }, vec![cross_128], cross_carry_32)?;
-    let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 1 }, vec![cross_carry_32], cross_carry_bit)?;
+    let bld = bld.with_instruction(
+        Op::Slice { lo: 32, hi: 64 },
+        vec![cross_128],
+        cross_carry_32,
+    )?;
+    let bld = bld.with_instruction(
+        Op::Slice { lo: 0, hi: 1 },
+        vec![cross_carry_32],
+        cross_carry_bit,
+    )?;
 
     // ── partial = Concat(a0, cross_lo) = a0 + cross_lo * 2^32 ───────
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![a0, cross_lo], partial_64,
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![a0, cross_lo],
+        partial_64,
     )?;
     // Extend to 128 bits
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![partial_64, zeros_64_w], partial_128,
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![partial_64, zeros_64_w],
+        partial_128,
     )?;
 
     // ── carry correction ─────────────────────────────────────────────
     // If cross overflowed (carry bit set), add (2^32 - 1) to account
     // for the extra 2^64 ≡ 2^32 - 1 (mod p).
     let bld = bld.with_instruction(
-        Op::Mux, vec![cross_carry_bit, zero_128_wire, corr_val_wire], carry_corr_128,
+        Op::Mux,
+        vec![cross_carry_bit, zero_128_wire, corr_val_wire],
+        carry_corr_128,
     )?;
 
     // ── Accumulate with bias ─────────────────────────────────────────
@@ -302,10 +381,10 @@ pub fn goldilocks_mul_reduce_arrow() -> Result<GoldilocksMulReduceArrow, Error> 
     // product = p0 + (p1 + p2) << 32 + p3 << 64
     let (bld, p0_128) = bld.with_wire(WireTy::Bits(128));
     let (bld, p3_128) = bld.with_wire(WireTy::Bits(128));
-    let (bld, cross_64) = bld.with_wire(WireTy::Bits(64));    // p1 + p2
-    let (bld, cross_carry) = bld.with_wire(WireTy::Bit);       // overflow from p1+p2
-    let (bld, cross_lo_32) = bld.with_wire(WireTy::Bits(32));  // cross[0:32]
-    let (bld, cross_hi_32) = bld.with_wire(WireTy::Bits(32));  // cross[32:64]
+    let (bld, cross_64) = bld.with_wire(WireTy::Bits(64)); // p1 + p2
+    let (bld, cross_carry) = bld.with_wire(WireTy::Bit); // overflow from p1+p2
+    let (bld, cross_lo_32) = bld.with_wire(WireTy::Bits(32)); // cross[0:32]
+    let (bld, cross_hi_32) = bld.with_wire(WireTy::Bits(32)); // cross[32:64]
 
     // cross_lo << 32 as 64-bit, then extend to 128
     let (bld, cross_lo_shifted_64) = bld.with_wire(WireTy::Bits(64));
@@ -366,21 +445,37 @@ pub fn goldilocks_mul_reduce_arrow() -> Result<GoldilocksMulReduceArrow, Error> 
 
     // ── Constants ────────────────────────────────────────────────────
     let bld = bld.with_instruction(
-        Op::Const { bits: crate::hdl::common::zeros_32_bitseq(), ty: WireTy::Bits(32) },
-        vec![], zeros_32_w,
+        Op::Const {
+            bits: crate::hdl::common::zeros_32_bitseq(),
+            ty: WireTy::Bits(32),
+        },
+        vec![],
+        zeros_32_w,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: crate::hdl::common::zeros_64_bitseq(), ty: WireTy::Bits(64) },
-        vec![], zeros_64_w,
+        Op::Const {
+            bits: crate::hdl::common::zeros_64_bitseq(),
+            ty: WireTy::Bits(64),
+        },
+        vec![],
+        zeros_64_w,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(0), ty: WireTy::Bits(128) },
-        vec![], zero_128_wire,
+        Op::Const {
+            bits: u128_to_bitseq(0),
+            ty: WireTy::Bits(128),
+        },
+        vec![],
+        zero_128_wire,
     )?;
     // 2^64 as a 128-bit constant (bit 64 set)
     let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(1_u128 << 64), ty: WireTy::Bits(128) },
-        vec![], carry_64_const,
+        Op::Const {
+            bits: u128_to_bitseq(1_u128 << 64),
+            ty: WireTy::Bits(128),
+        },
+        vec![],
+        carry_64_const,
     )?;
 
     // ── Split operands into 32-bit halves ────────────────────────────
@@ -391,16 +486,36 @@ pub fn goldilocks_mul_reduce_arrow() -> Result<GoldilocksMulReduceArrow, Error> 
 
     // Zero-extend to 64 bits
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![a_lo, zeros_32_w], a_lo_64,
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![a_lo, zeros_32_w],
+        a_lo_64,
     )?;
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![a_hi, zeros_32_w], a_hi_64,
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![a_hi, zeros_32_w],
+        a_hi_64,
     )?;
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![b_lo, zeros_32_w], b_lo_64,
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![b_lo, zeros_32_w],
+        b_lo_64,
     )?;
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![b_hi, zeros_32_w], b_hi_64,
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![b_hi, zeros_32_w],
+        b_hi_64,
     )?;
 
     // ── Four partial products (32×32→64, exact) ──────────────────────
@@ -422,33 +537,59 @@ pub fn goldilocks_mul_reduce_arrow() -> Result<GoldilocksMulReduceArrow, Error> 
 
     // cross_lo << 32 as 64-bit: Concat(zeros_32, cross_lo_32)
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![zeros_32_w, cross_lo_32],
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![zeros_32_w, cross_lo_32],
         cross_lo_shifted_64,
     )?;
 
     // Extend partial products to 128 bits
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![p0, zeros_64_w], p0_128,
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![p0, zeros_64_w],
+        p0_128,
     )?;
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![cross_lo_shifted_64, zeros_64_w],
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![cross_lo_shifted_64, zeros_64_w],
         cross_lo_shifted_128,
     )?;
 
     // cross_hi goes to bits 64..96: zero-extend to 64, then place in high half
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![cross_hi_32, zeros_32_w],
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![cross_hi_32, zeros_32_w],
         cross_hi_64,
     )?;
     // cross_hi_128 = Concat(zeros_64, cross_hi_64) → cross_hi at bits 64..96
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![zeros_64_w, cross_hi_64],
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![zeros_64_w, cross_hi_64],
         cross_hi_128_raw,
     )?;
 
     // p3 goes to bits 64..128: Concat(zeros_64, p3)
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![zeros_64_w, p3], p3_128,
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![zeros_64_w, p3],
+        p3_128,
     )?;
 
     // carry contribution: if cross overflowed, add 2^64 (at bit position 64+32=96)
@@ -457,36 +598,70 @@ pub fn goldilocks_mul_reduce_arrow() -> Result<GoldilocksMulReduceArrow, Error> 
     // contributes 2^96 to the product.  As a 128-bit value: 1 << 96.
     let (bld, carry_96_const) = bld.with_wire(WireTy::Bits(128));
     let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(1_u128 << 96), ty: WireTy::Bits(128) },
-        vec![], carry_96_const,
+        Op::Const {
+            bits: u128_to_bitseq(1_u128 << 96),
+            ty: WireTy::Bits(128),
+        },
+        vec![],
+        carry_96_const,
     )?;
     let bld = bld.with_instruction(
-        Op::Mux, vec![cross_carry, zero_128_wire, carry_96_const], carry_contribution,
+        Op::Mux,
+        vec![cross_carry, zero_128_wire, carry_96_const],
+        carry_contribution,
     )?;
 
     // Assemble: product = p0 + cross_lo_shifted + cross_hi_at_64 + p3_at_64 + carry
-    let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![p0_128, cross_lo_shifted_128], prod_step1)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![prod_step1, cross_hi_128_raw], prod_step2)?;
+    let bld = bld.with_instruction(
+        Op::Bin(BinOp::Add),
+        vec![p0_128, cross_lo_shifted_128],
+        prod_step1,
+    )?;
+    let bld = bld.with_instruction(
+        Op::Bin(BinOp::Add),
+        vec![prod_step1, cross_hi_128_raw],
+        prod_step2,
+    )?;
     let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![prod_step2, p3_128], prod_step3)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![prod_step3, carry_contribution], product_128)?;
+    let bld = bld.with_instruction(
+        Op::Bin(BinOp::Add),
+        vec![prod_step3, carry_contribution],
+        product_128,
+    )?;
 
     // ── Solinas reduction (inlined from reduce_arrow logic) ──────────
     // Constants
     let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(corr_val), ty: WireTy::Bits(128) },
-        vec![], r_corr_val_wire,
+        Op::Const {
+            bits: u128_to_bitseq(corr_val),
+            ty: WireTy::Bits(128),
+        },
+        vec![],
+        r_corr_val_wire,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(p), ty: WireTy::Bits(128) },
-        vec![], r_p_wire,
+        Op::Const {
+            bits: u128_to_bitseq(p),
+            ty: WireTy::Bits(128),
+        },
+        vec![],
+        r_p_wire,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(two_p), ty: WireTy::Bits(128) },
-        vec![], r_two_p_wire,
+        Op::Const {
+            bits: u128_to_bitseq(two_p),
+            ty: WireTy::Bits(128),
+        },
+        vec![],
+        r_two_p_wire,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: u128_to_bitseq(0), ty: WireTy::Bits(128) },
-        vec![], r_zero_128,
+        Op::Const {
+            bits: u128_to_bitseq(0),
+            ty: WireTy::Bits(128),
+        },
+        vec![],
+        r_zero_128,
     )?;
 
     // Extract 32-bit limbs from product
@@ -497,48 +672,107 @@ pub fn goldilocks_mul_reduce_arrow() -> Result<GoldilocksMulReduceArrow, Error> 
 
     // Zero-extend limbs to 128
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![r_a1, zeros_32_w], r_a1_64,
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![r_a1, zeros_32_w],
+        r_a1_64,
     )?;
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![r_a1_64, zeros_64_w], r_a1_128,
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![r_a1_64, zeros_64_w],
+        r_a1_128,
     )?;
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![r_a2, zeros_32_w], r_a2_64,
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![r_a2, zeros_32_w],
+        r_a2_64,
     )?;
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![r_a2_64, zeros_64_w], r_a2_128,
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![r_a2_64, zeros_64_w],
+        r_a2_128,
     )?;
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![r_a2_64, zeros_64_w], r_a2_ext_128,
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![r_a2_64, zeros_64_w],
+        r_a2_ext_128,
     )?;
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![r_a3, zeros_32_w], r_a3_64,
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![r_a3, zeros_32_w],
+        r_a3_64,
     )?;
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![r_a3_64, zeros_64_w], r_a3_ext_128,
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![r_a3_64, zeros_64_w],
+        r_a3_ext_128,
     )?;
 
     // cross = a1 + a2
     let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![r_a1_128, r_a2_128], r_cross_128)?;
     let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 32 }, vec![r_cross_128], r_cross_lo)?;
-    let bld = bld.with_instruction(Op::Slice { lo: 32, hi: 64 }, vec![r_cross_128], r_cross_carry_32)?;
-    let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 1 }, vec![r_cross_carry_32], r_cross_carry_bit)?;
+    let bld = bld.with_instruction(
+        Op::Slice { lo: 32, hi: 64 },
+        vec![r_cross_128],
+        r_cross_carry_32,
+    )?;
+    let bld = bld.with_instruction(
+        Op::Slice { lo: 0, hi: 1 },
+        vec![r_cross_carry_32],
+        r_cross_carry_bit,
+    )?;
 
     // partial = Concat(a0, cross_lo)
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 32, high_width: 32 }, vec![r_a0, r_cross_lo], r_partial_64,
+        Op::Concat {
+            low_width: 32,
+            high_width: 32,
+        },
+        vec![r_a0, r_cross_lo],
+        r_partial_64,
     )?;
     let bld = bld.with_instruction(
-        Op::Concat { low_width: 64, high_width: 64 }, vec![r_partial_64, zeros_64_w], r_partial_128,
+        Op::Concat {
+            low_width: 64,
+            high_width: 64,
+        },
+        vec![r_partial_64, zeros_64_w],
+        r_partial_128,
     )?;
 
     // Carry correction
     let bld = bld.with_instruction(
-        Op::Mux, vec![r_cross_carry_bit, r_zero_128, r_corr_val_wire], r_carry_corr,
+        Op::Mux,
+        vec![r_cross_carry_bit, r_zero_128, r_corr_val_wire],
+        r_carry_corr,
     )?;
 
     // Accumulate with bias
-    let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![r_partial_128, r_carry_corr], r_acc1)?;
+    let bld = bld.with_instruction(
+        Op::Bin(BinOp::Add),
+        vec![r_partial_128, r_carry_corr],
+        r_acc1,
+    )?;
     let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![r_acc1, r_p_wire], r_acc2)?;
     let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![r_acc2, r_a2_ext_128], r_acc3)?;
     let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![r_acc3, r_a3_ext_128], r_acc4)?;
@@ -552,7 +786,11 @@ pub fn goldilocks_mul_reduce_arrow() -> Result<GoldilocksMulReduceArrow, Error> 
     let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![r_step1, r_p_wire], r_below_p)?;
     let bld = bld.with_instruction(Op::Not, vec![r_below_p], r_at_least_p)?;
     let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![r_step1, r_p_wire], r_step2_sub)?;
-    let bld = bld.with_instruction(Op::Mux, vec![r_at_least_p, r_step1, r_step2_sub], r_result_128)?;
+    let bld = bld.with_instruction(
+        Op::Mux,
+        vec![r_at_least_p, r_step1, r_step2_sub],
+        r_result_128,
+    )?;
 
     let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 64 }, vec![r_result_128], result)?;
 
@@ -572,7 +810,7 @@ pub fn reference_reduce(product: u128) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hdl::common::{u64_to_bitseq, GOLDILOCKS_PRIME_U64};
+    use crate::hdl::common::{GOLDILOCKS_PRIME_U64, u64_to_bitseq};
     use hdl_cat_sim::Testbench;
 
     #[test]
@@ -593,7 +831,10 @@ mod tests {
         assert_eq!(reference_reduce(1), 1);
         assert_eq!(reference_reduce(42), 42);
         assert_eq!(reference_reduce(GOLDILOCKS_PRIME_U128), 0);
-        assert_eq!(reference_reduce(GOLDILOCKS_PRIME_U128 - 1), GOLDILOCKS_PRIME_U64 - 1);
+        assert_eq!(
+            reference_reduce(GOLDILOCKS_PRIME_U128 - 1),
+            GOLDILOCKS_PRIME_U64 - 1
+        );
     }
 
     #[test]
@@ -609,8 +850,16 @@ mod tests {
         let p = GOLDILOCKS_PRIME_U128;
 
         let test_cases: Vec<u128> = vec![
-            0, 1, 42, p - 1, p, p + 1, 2 * p, 2 * p + 7,
-            u128::from(u64::MAX), u128::from(u64::MAX) * u128::from(u64::MAX),
+            0,
+            1,
+            42,
+            p - 1,
+            p,
+            p + 1,
+            2 * p,
+            2 * p + 7,
+            u128::from(u64::MAX),
+            u128::from(u64::MAX) * u128::from(u64::MAX),
         ];
 
         for val in test_cases {
@@ -621,7 +870,10 @@ mod tests {
             let result = testbench.run(inputs).run()?;
             let output = crate::hdl::common::bitseq_to_u64(result[0].value())?;
             let expected = reference_reduce(val);
-            assert_eq!(output, expected, "reduce({val:#034x}): got {output:#018x}, expected {expected:#018x}");
+            assert_eq!(
+                output, expected,
+                "reduce({val:#034x}): got {output:#018x}, expected {expected:#018x}"
+            );
         }
 
         Ok(())
@@ -633,9 +885,16 @@ mod tests {
         let p64 = GOLDILOCKS_PRIME_U64;
 
         let test_cases: Vec<(u64, u64)> = vec![
-            (0, 0), (1, 1), (1, 42), (3, 5), (7, 11),
-            (p64 - 1, 1), (p64 - 1, 2), (p64 - 1, p64 - 1),
-            (0xDEAD_BEEF, 0xCAFE_BABE), (u64::MAX, u64::MAX),
+            (0, 0),
+            (1, 1),
+            (1, 42),
+            (3, 5),
+            (7, 11),
+            (p64 - 1, 1),
+            (p64 - 1, 2),
+            (p64 - 1, p64 - 1),
+            (0xDEAD_BEEF, 0xCAFE_BABE),
+            (u64::MAX, u64::MAX),
         ];
 
         for (a_val, b_val) in test_cases {
@@ -648,8 +907,10 @@ mod tests {
             let result = testbench.run(inputs).run()?;
             let output = crate::hdl::common::bitseq_to_u64(result[0].value())?;
             let expected = reference_reduce(u128::from(a_val) * u128::from(b_val));
-            assert_eq!(output, expected,
-                "mul_reduce({a_val:#018x}, {b_val:#018x}): got {output:#018x}, expected {expected:#018x}");
+            assert_eq!(
+                output, expected,
+                "mul_reduce({a_val:#018x}, {b_val:#018x}): got {output:#018x}, expected {expected:#018x}"
+            );
         }
 
         Ok(())

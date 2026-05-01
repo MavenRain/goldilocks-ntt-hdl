@@ -80,10 +80,9 @@ pub fn full_pipeline_path() -> Result<Path, FreeCategoryError> {
     let graph = NttGraph;
     (0..NTT_STAGES)
         .map(|k| Path::singleton(&graph, Edge::new(k)))
-        .try_fold(
-            Path::identity(Vertex::new(0)),
-            |acc, edge_path| acc.compose(edge_path?),
-        )
+        .try_fold(Path::identity(Vertex::new(0)), |acc, edge_path| {
+            acc.compose(edge_path?)
+        })
 }
 
 /// Build a sub-pipeline path from stage `start` to stage `end` (exclusive).
@@ -104,10 +103,9 @@ pub fn sub_pipeline_path(start: usize, end: usize) -> Result<Path, FreeCategoryE
         let graph = NttGraph;
         (start..end)
             .map(|k| Path::singleton(&graph, Edge::new(k)))
-            .try_fold(
-                Path::identity(Vertex::new(start)),
-                |acc, edge_path| acc.compose(edge_path?),
-            )
+            .try_fold(Path::identity(Vertex::new(start)), |acc, edge_path| {
+                acc.compose(edge_path?)
+            })
     }
 }
 

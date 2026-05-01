@@ -38,11 +38,8 @@ where
         let initial_bits: Vec<bool> = (0..64).map(|_| false).collect();
         let initial_state = BitSeq::from_vec(initial_bits);
 
-        let arrow: CircuitArrow<Obj<T>, Obj<T>> = CircuitArrow::from_raw_parts(
-            bld.build(),
-            vec![input],
-            vec![input],
-        );
+        let arrow: CircuitArrow<Obj<T>, Obj<T>> =
+            CircuitArrow::from_raw_parts(bld.build(), vec![input], vec![input]);
 
         Sync::from_arrow(arrow, initial_state)
     } else {
@@ -51,7 +48,10 @@ where
         //   w1 = data input (Bits(64))
         //   w2 = next-state array (ArrayShiftIn output)
         //   w3 = data output (ArrayTail output, Bits(64))
-        let arr_ty = WireTy::Array { element_width: 64, depth: n };
+        let arr_ty = WireTy::Array {
+            element_width: 64,
+            depth: n,
+        };
         let (bld, arr_state) = HdlGraphBuilder::new().with_wire(arr_ty.clone());
         let (bld, data_in) = bld.with_wire(WireTy::Bits(64));
         let (bld, next_arr) = bld.with_wire(arr_ty);
@@ -59,13 +59,19 @@ where
 
         // next_arr = shift_in(arr_state, data_in)
         let bld = bld.with_instruction(
-            Op::ArrayShiftIn { element_width: 64, depth: n },
+            Op::ArrayShiftIn {
+                element_width: 64,
+                depth: n,
+            },
             vec![arr_state, data_in],
             next_arr,
         )?;
         // data_out = arr_state[n - 1]
         let bld = bld.with_instruction(
-            Op::ArrayTail { element_width: 64, depth: n },
+            Op::ArrayTail {
+                element_width: 64,
+                depth: n,
+            },
             vec![arr_state],
             data_out,
         )?;
@@ -78,9 +84,7 @@ where
         let output_wires = vec![next_arr, data_out];
 
         // Compact initial state: one element's worth of zeros (64 bits).
-        let initial_state = BitSeq::from_vec(
-            (0..64).map(|_| false).collect(),
-        );
+        let initial_state = BitSeq::from_vec((0..64).map(|_| false).collect());
 
         Ok(hdl_cat_sync::machine::from_raw(
             graph,

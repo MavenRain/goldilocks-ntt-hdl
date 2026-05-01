@@ -29,10 +29,7 @@ pub type GoldilocksElement = Bits<64>;
 
 /// Input bundle for size-4 pipeline: `(((data, valid), step_root_0), step_root_1)`.
 pub type Size4PipelineInput = CircuitTensor<
-    CircuitTensor<
-        CircuitTensor<Obj<GoldilocksElement>, Obj<bool>>,
-        Obj<GoldilocksElement>,
-    >,
+    CircuitTensor<CircuitTensor<Obj<GoldilocksElement>, Obj<bool>>, Obj<GoldilocksElement>>,
     Obj<GoldilocksElement>,
 >;
 
@@ -56,7 +53,10 @@ fn merge_graphs(
     remap_g: impl Fn(WireId) -> WireId + Clone,
 ) -> HdlGraph {
     // Allocate wires from both graphs
-    let bld = f_graph.wires().iter().cloned()
+    let bld = f_graph
+        .wires()
+        .iter()
+        .cloned()
         .chain(g_graph.wires().iter().cloned())
         .fold(HdlGraphBuilder::new(), |b, ty| b.with_wire(ty).0);
 
@@ -68,7 +68,9 @@ fn merge_graphs(
     // Copy g's instructions with wire remapping
     let bld = bld.and_then(|b| {
         g_graph.instructions().iter().try_fold(b, |b, instr| {
-            let new_inputs: Vec<WireId> = instr.inputs().iter()
+            let new_inputs: Vec<WireId> = instr
+                .inputs()
+                .iter()
                 .copied()
                 .map(remap_g.clone())
                 .collect();
@@ -118,14 +120,16 @@ pub fn size_4_pipeline() -> Result<Size4PipelineSync, Error> {
     // Keep:       data_g_in[2] as pipeline input  (step_root_1)
     let shift = |w: WireId| WireId::new(w.index() + f_wire_count);
 
-    let substitution: Vec<(WireId, WireId)> = data_g_in[..2].iter()
+    let substitution: Vec<(WireId, WireId)> = data_g_in[..2]
+        .iter()
         .zip(data_f_out.iter())
         .map(|(g_w, f_w)| (shift(*g_w), *f_w))
         .collect();
 
     let remap_g = move |w: WireId| -> WireId {
         let shifted = WireId::new(w.index() + f_wire_count);
-        substitution.iter()
+        substitution
+            .iter()
             .find_map(|(from, to)| (*from == shifted).then_some(*to))
             .unwrap_or(shifted)
     };
@@ -133,14 +137,18 @@ pub fn size_4_pipeline() -> Result<Size4PipelineSync, Error> {
     let merged = merge_graphs(&f_graph, &g_graph, remap_g);
 
     // Pipeline inputs: state_0 ++ state_1 ++ data_in,valid,root_0 ++ root_1
-    let pipeline_inputs: Vec<WireId> = state_f_in.iter().copied()
+    let pipeline_inputs: Vec<WireId> = state_f_in
+        .iter()
+        .copied()
         .chain(state_g_in.iter().copied().map(shift))
         .chain(data_f_in.iter().copied())
         .chain(data_g_in[2..].iter().copied().map(shift))
         .collect();
 
     // Pipeline outputs: next_state_0 ++ next_state_1 ++ stage_1 data_out
-    let pipeline_outputs: Vec<WireId> = state_f_out.iter().copied()
+    let pipeline_outputs: Vec<WireId> = state_f_out
+        .iter()
+        .copied()
         .chain(state_g_out.iter().copied().map(shift))
         .chain(data_g_out.iter().copied().map(shift))
         .collect();
@@ -149,7 +157,11 @@ pub fn size_4_pipeline() -> Result<Size4PipelineSync, Error> {
     let combined_sc = f_sc + g_sc;
 
     Ok(hdl_cat_sync::machine::from_raw(
-        merged, pipeline_inputs, pipeline_outputs, combined_state, combined_sc,
+        merged,
+        pipeline_inputs,
+        pipeline_outputs,
+        combined_state,
+        combined_sc,
     ))
 }
 
@@ -182,7 +194,10 @@ struct PipelineAccum {
 /// Returns `None` if the slice has fewer than 3 elements.
 fn split_data_wires(data: &[WireId]) -> Option<(&[WireId], WireId)> {
     let (dv, roots) = data.split_at(2.min(data.len()));
-    (dv.len() == 2).then(|| roots.first().copied()).flatten().map(|r| (dv, r))
+    (dv.len() == 2)
+        .then(|| roots.first().copied())
+        .flatten()
+        .map(|r| (dv, r))
 }
 
 /// Compose N SDF stages into a single pipeline [`Sync`] machine.
@@ -200,7 +215,9 @@ fn split_data_wires(data: &[WireId]) -> Option<(&[WireId], WireId)> {
 ///
 /// Returns [`Error`] if any stage construction or graph merge fails.
 #[allow(clippy::similar_names, clippy::too_many_lines)]
-pub fn compose_pipeline(depths: &[usize]) -> Result<Sync<Obj<GoldilocksElement>, PipelineInput, PipelineOutput>, Error> {
+pub fn compose_pipeline(
+    depths: &[usize],
+) -> Result<Sync<Obj<GoldilocksElement>, PipelineInput, PipelineOutput>, Error> {
     let (&first_depth, rest_depths) = depths.split_first().ok_or_else(|| Error::WidthMismatch {
         expected: hdl_cat_error::Width::new(1),
         actual: hdl_cat_error::Width::new(0),
@@ -213,8 +230,8 @@ pub fn compose_pipeline(depths: &[usize]) -> Result<Sync<Obj<GoldilocksElement>,
 
     // data_f_in = [data_in, valid_in, step_root_0]
     // data_f_out = [data_out, valid_out]
-    let (data_in_valid, step_root_0) = split_data_wires(data_f_in)
-        .ok_or_else(|| Error::WidthMismatch {
+    let (data_in_valid, step_root_0) =
+        split_data_wires(data_f_in).ok_or_else(|| Error::WidthMismatch {
             expected: hdl_cat_error::Width::new(3),
             actual: hdl_cat_error::Width::new(u32::try_from(data_f_in.len()).unwrap_or(0)),
         })?;
@@ -241,23 +258,23 @@ pub fn compose_pipeline(depths: &[usize]) -> Result<Sync<Obj<GoldilocksElement>,
         let (state_g_out, data_g_out) = g_outputs.split_at(g_sc);
 
         // data_g_in = [data_in, valid_in, step_root]
-        let (g_dv, g_step_root) = split_data_wires(data_g_in)
-            .ok_or_else(|| Error::WidthMismatch {
+        let (g_dv, g_step_root) =
+            split_data_wires(data_g_in).ok_or_else(|| Error::WidthMismatch {
                 expected: hdl_cat_error::Width::new(3),
-                actual: hdl_cat_error::Width::new(
-                    u32::try_from(data_g_in.len()).unwrap_or(0),
-                ),
+                actual: hdl_cat_error::Width::new(u32::try_from(data_g_in.len()).unwrap_or(0)),
             })?;
 
         // Substitute: g data_in -> acc data_out, g valid_in -> acc valid_out
-        let substitution: Vec<(WireId, WireId)> = g_dv.iter()
+        let substitution: Vec<(WireId, WireId)> = g_dv
+            .iter()
             .zip(acc.data_outputs.iter())
             .map(|(g_w, f_w)| (shift(*g_w), *f_w))
             .collect();
 
         let remap_g = move |w: WireId| -> WireId {
             let shifted = WireId::new(w.index() + f_wire_count);
-            substitution.iter()
+            substitution
+                .iter()
                 .find_map(|(from, to)| (*from == shifted).then_some(*to))
                 .unwrap_or(shifted)
         };
@@ -266,14 +283,20 @@ pub fn compose_pipeline(depths: &[usize]) -> Result<Sync<Obj<GoldilocksElement>,
 
         Ok::<PipelineAccum, Error>(PipelineAccum {
             graph: merged,
-            state_inputs: acc.state_inputs.into_iter()
+            state_inputs: acc
+                .state_inputs
+                .into_iter()
                 .chain(state_g_in.iter().copied().map(shift))
                 .collect(),
-            state_outputs: acc.state_outputs.into_iter()
+            state_outputs: acc
+                .state_outputs
+                .into_iter()
                 .chain(state_g_out.iter().copied().map(shift))
                 .collect(),
             data_inputs: acc.data_inputs,
-            step_root_inputs: acc.step_root_inputs.into_iter()
+            step_root_inputs: acc
+                .step_root_inputs
+                .into_iter()
                 .chain(core::iter::once(shift(g_step_root)))
                 .collect(),
             data_outputs: data_g_out.iter().copied().map(shift).collect(),
@@ -283,13 +306,17 @@ pub fn compose_pipeline(depths: &[usize]) -> Result<Sync<Obj<GoldilocksElement>,
     })?;
 
     // Pipeline inputs: state ++ data_in,valid ++ step_root_0 ++ ... ++ step_root_{N-1}
-    let pipeline_inputs: Vec<WireId> = result.state_inputs.into_iter()
+    let pipeline_inputs: Vec<WireId> = result
+        .state_inputs
+        .into_iter()
         .chain(result.data_inputs)
         .chain(result.step_root_inputs)
         .collect();
 
     // Pipeline outputs: next_state ++ last stage data_out
-    let pipeline_outputs: Vec<WireId> = result.state_outputs.into_iter()
+    let pipeline_outputs: Vec<WireId> = result
+        .state_outputs
+        .into_iter()
         .chain(result.data_outputs)
         .collect();
 
@@ -307,10 +334,8 @@ pub fn compose_pipeline(depths: &[usize]) -> Result<Sync<Obj<GoldilocksElement>,
 /// The exact circuit-tensor shape depends on the number of stages,
 /// but the flat wire layout is:
 /// `(data_in:64, valid_in:1, step_root_0:64, ..., step_root_{N-1}:64)`.
-pub type PipelineInput = CircuitTensor<
-    CircuitTensor<Obj<GoldilocksElement>, Obj<bool>>,
-    Obj<GoldilocksElement>,
->;
+pub type PipelineInput =
+    CircuitTensor<CircuitTensor<Obj<GoldilocksElement>, Obj<bool>>, Obj<GoldilocksElement>>;
 
 /// Output bundle for an N-stage pipeline: `(data:64, valid:1)`.
 pub type PipelineOutput = CircuitTensor<Obj<GoldilocksElement>, Obj<bool>>;
@@ -326,8 +351,7 @@ pub type PipelineOutput = CircuitTensor<Obj<GoldilocksElement>, Obj<bool>>;
 /// Returns [`Error`] if pipeline construction fails.
 pub fn emit_size_4_pipeline_verilog() -> Result<Io<hdl_cat_error::Error, String>, Error> {
     let pipeline = size_4_pipeline()?;
-    let (graph, input_wires, output_wires, initial_state, state_wire_count) =
-        pipeline.into_parts();
+    let (graph, input_wires, output_wires, initial_state, state_wire_count) = pipeline.into_parts();
 
     let module = hdl_cat_verilog::emit_sync_graph(
         &graph,
@@ -362,8 +386,7 @@ pub fn emit_pipeline_verilog(
     name: &str,
 ) -> Result<Io<hdl_cat_error::Error, String>, Error> {
     let pipeline = compose_pipeline(depths)?;
-    let (graph, input_wires, output_wires, initial_state, state_wire_count) =
-        pipeline.into_parts();
+    let (graph, input_wires, output_wires, initial_state, state_wire_count) = pipeline.into_parts();
 
     let module = hdl_cat_verilog::emit_sync_graph(
         &graph,
@@ -380,7 +403,7 @@ pub fn emit_pipeline_verilog(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hdl::common::{bitseq_to_u64, u64_to_bitseq, GOLDILOCKS_PRIME_U64};
+    use crate::hdl::common::{GOLDILOCKS_PRIME_U64, bitseq_to_u64, u64_to_bitseq};
     use hdl_cat_kind::BitSeq;
     use hdl_cat_sim::Testbench;
 
@@ -411,7 +434,12 @@ mod tests {
 
     impl RefStage {
         fn new(depth: usize) -> Self {
-            Self { delay: vec![0; depth], twiddle: 1, counter: 0, depth }
+            Self {
+                delay: vec![0; depth],
+                twiddle: 1,
+                counter: 0,
+                depth,
+            }
         }
 
         fn step(self, data_in: u64, step_root: u64) -> (Self, u64) {
@@ -420,16 +448,12 @@ mod tests {
             let delayed = self.delay[self.depth - 1];
 
             let (data_out, delay_in, next_tw) = if is_butterfly {
-                let upper = u64::try_from(
-                    (u128::from(delayed) + u128::from(data_in)) % p,
-                ).unwrap_or(0);
+                let upper =
+                    u64::try_from((u128::from(delayed) + u128::from(data_in)) % p).unwrap_or(0);
                 let diff = (u128::from(delayed) + p - u128::from(data_in)) % p;
-                let lower = u64::try_from(
-                    (diff * u128::from(self.twiddle)) % p,
-                ).unwrap_or(0);
-                let tw = u64::try_from(
-                    (u128::from(self.twiddle) * u128::from(step_root)) % p,
-                ).unwrap_or(0);
+                let lower = u64::try_from((diff * u128::from(self.twiddle)) % p).unwrap_or(0);
+                let tw = u64::try_from((u128::from(self.twiddle) * u128::from(step_root)) % p)
+                    .unwrap_or(0);
                 (lower, upper, tw)
             } else {
                 // R2SDF fill: output delay tail, store input
@@ -446,18 +470,24 @@ mod tests {
                 self.counter + 1
             };
 
-            (RefStage {
-                delay: next_delay,
-                twiddle: next_tw,
-                counter: next_counter,
-                depth: self.depth,
-            }, data_out)
+            (
+                RefStage {
+                    delay: next_delay,
+                    twiddle: next_tw,
+                    counter: next_counter,
+                    depth: self.depth,
+                },
+                data_out,
+            )
         }
     }
 
     fn ref_pipeline_step(
-        s0: RefStage, s1: RefStage,
-        data_in: u64, step_root_0: u64, step_root_1: u64,
+        s0: RefStage,
+        s1: RefStage,
+        data_in: u64,
+        step_root_0: u64,
+        step_root_1: u64,
     ) -> (RefStage, RefStage, u64) {
         let (s0, mid) = s0.step(data_in, step_root_0);
         let (s1, out) = s1.step(mid, step_root_1);
@@ -480,7 +510,8 @@ mod tests {
 
         let data: Vec<u64> = vec![1, 2, 3, 4, 5, 6, 7, 8];
 
-        let inputs: Vec<BitSeq> = data.iter()
+        let inputs: Vec<BitSeq> = data
+            .iter()
             .map(|d| make_input(*d, true, step_root_0, step_root_1))
             .collect();
 
@@ -492,20 +523,25 @@ mod tests {
             ((RefStage::new(2), RefStage::new(1)), Vec::new()),
             |((s0, s1), outs), d| {
                 let (s0, s1, out) = ref_pipeline_step(s0, s1, *d, step_root_0, step_root_1);
-                ((s0, s1), outs.into_iter().chain(core::iter::once(out)).collect())
+                (
+                    (s0, s1),
+                    outs.into_iter().chain(core::iter::once(out)).collect(),
+                )
             },
         );
 
-        results.iter().zip(ref_outputs.iter()).enumerate().try_for_each(
-            |(i, (sample, expected))| {
+        results
+            .iter()
+            .zip(ref_outputs.iter())
+            .enumerate()
+            .try_for_each(|(i, (sample, expected))| {
                 let (actual, _) = read_output(sample.value())?;
                 assert_eq!(
                     actual, *expected,
                     "cycle {i}: got {actual:#018x}, expected {expected:#018x}",
                 );
                 Ok::<(), Error>(())
-            },
-        )?;
+            })?;
 
         Ok(())
     }
@@ -531,7 +567,8 @@ mod tests {
 
         let data: Vec<u64> = vec![1, 2, 3, 4];
 
-        let inputs: Vec<BitSeq> = data.iter()
+        let inputs: Vec<BitSeq> = data
+            .iter()
             .map(|d| make_input(*d, true, step_root_0, step_root_1))
             .collect();
 
@@ -542,20 +579,25 @@ mod tests {
             ((RefStage::new(2), RefStage::new(1)), Vec::new()),
             |((s0, s1), outs), d| {
                 let (s0, s1, out) = ref_pipeline_step(s0, s1, *d, step_root_0, step_root_1);
-                ((s0, s1), outs.into_iter().chain(core::iter::once(out)).collect())
+                (
+                    (s0, s1),
+                    outs.into_iter().chain(core::iter::once(out)).collect(),
+                )
             },
         );
 
-        results.iter().zip(ref_outputs.iter()).enumerate().try_for_each(
-            |(i, (sample, expected))| {
+        results
+            .iter()
+            .zip(ref_outputs.iter())
+            .enumerate()
+            .try_for_each(|(i, (sample, expected))| {
                 let (actual, _) = read_output(sample.value())?;
                 assert_eq!(
                     actual, *expected,
                     "cycle {i}: got {actual:#018x}, expected {expected:#018x}",
                 );
                 Ok::<(), Error>(())
-            },
-        )?;
+            })?;
 
         Ok(())
     }
@@ -574,7 +616,8 @@ mod tests {
 
         let data: Vec<u64> = vec![1, 2, 3, 4, 5, 6, 7, 8];
 
-        let inputs: Vec<BitSeq> = data.iter()
+        let inputs: Vec<BitSeq> = data
+            .iter()
             .map(|d| make_input(*d, true, step_root_0, step_root_1))
             .collect();
 
@@ -585,20 +628,25 @@ mod tests {
             ((RefStage::new(2), RefStage::new(1)), Vec::new()),
             |((s0, s1), outs), d| {
                 let (s0, s1, out) = ref_pipeline_step(s0, s1, *d, step_root_0, step_root_1);
-                ((s0, s1), outs.into_iter().chain(core::iter::once(out)).collect())
+                (
+                    (s0, s1),
+                    outs.into_iter().chain(core::iter::once(out)).collect(),
+                )
             },
         );
 
-        results.iter().zip(ref_outputs.iter()).enumerate().try_for_each(
-            |(i, (sample, expected))| {
+        results
+            .iter()
+            .zip(ref_outputs.iter())
+            .enumerate()
+            .try_for_each(|(i, (sample, expected))| {
                 let (actual, _) = read_output(sample.value())?;
                 assert_eq!(
                     actual, *expected,
                     "compose_pipeline cycle {i}: got {actual:#018x}, expected {expected:#018x}",
                 );
                 Ok::<(), Error>(())
-            },
-        )?;
+            })?;
 
         Ok(())
     }
@@ -640,7 +688,10 @@ mod tests {
         assert!(text.contains("bram_ntt_4"), "missing module name");
         // Two stages produce two auto-detected array declarations.
         let arr_decl_count = count_occurrences(&text, "reg [63:0]");
-        assert!(arr_decl_count >= 2, "expected >= 2 array decls, got {arr_decl_count}");
+        assert!(
+            arr_decl_count >= 2,
+            "expected >= 2 array decls, got {arr_decl_count}"
+        );
         Ok(())
     }
 
@@ -653,7 +704,10 @@ mod tests {
         assert!(text.contains("module"), "missing module keyword");
         assert!(text.contains("bram_ntt_8"), "missing module name");
         let arr_decl_count = count_occurrences(&text, "reg [63:0]");
-        assert!(arr_decl_count >= 3, "expected >= 3 array decls, got {arr_decl_count}");
+        assert!(
+            arr_decl_count >= 3,
+            "expected >= 3 array decls, got {arr_decl_count}"
+        );
         Ok(())
     }
 
@@ -666,7 +720,10 @@ mod tests {
         assert!(text.contains("module"), "missing module keyword");
         assert!(text.contains("bram_ntt_16"), "missing module name");
         let arr_decl_count = count_occurrences(&text, "reg [63:0]");
-        assert!(arr_decl_count >= 4, "expected >= 4 array decls, got {arr_decl_count}");
+        assert!(
+            arr_decl_count >= 4,
+            "expected >= 4 array decls, got {arr_decl_count}"
+        );
         Ok(())
     }
 

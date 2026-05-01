@@ -14,7 +14,7 @@ use hdl_cat_bits::Bits;
 use hdl_cat_circuit::{CircuitArrow, CircuitTensor, Obj};
 use hdl_cat_error::Error;
 use hdl_cat_ir::HdlGraphBuilder;
-use hdl_cat_sync::{compose_sync, par_sync, Sync};
+use hdl_cat_sync::{Sync, compose_sync, par_sync};
 
 use crate::hdl::delay::delay_n;
 use crate::hdl::field_hdl::PrimeFieldHdl;
@@ -117,7 +117,9 @@ pub fn dif_butterfly() -> Result<DifButterflySync, Error> {
 
     // Cast to the declared return type via from_raw
     let (graph, inputs, outputs, init, sc) = composed.into_parts();
-    Ok(hdl_cat_sync::machine::from_raw(graph, inputs, outputs, init, sc))
+    Ok(hdl_cat_sync::machine::from_raw(
+        graph, inputs, outputs, init, sc,
+    ))
 }
 
 /// Software reference implementation for testing.
@@ -160,21 +162,25 @@ mod tests {
     fn butterfly_matches_reference() -> Result<(), Error> {
         let butterfly = dif_butterfly()?;
 
-        let test_cases: Vec<(u64, u64, u64)> = vec![
-            (0, 0, 1),
-            (3, 5, 1),
-            (10, 7, 2),
-            (100, 50, 3),
-        ];
+        let test_cases: Vec<(u64, u64, u64)> = vec![(0, 0, 1), (3, 5, 1), (10, 7, 2), (100, 50, 3)];
 
         // Feed test cases first, then BUTTERFLY_LATENCY flush cycles.
         // Results appear at indices BUTTERFLY_LATENCY .. BUTTERFLY_LATENCY + test_count.
-        let test_inputs: Vec<_> = test_cases.iter().map(|&(a, b, tw)| {
-            u64_to_bitseq(a).concat(u64_to_bitseq(b)).concat(u64_to_bitseq(tw))
-        }).collect();
+        let test_inputs: Vec<_> = test_cases
+            .iter()
+            .map(|&(a, b, tw)| {
+                u64_to_bitseq(a)
+                    .concat(u64_to_bitseq(b))
+                    .concat(u64_to_bitseq(tw))
+            })
+            .collect();
 
         let flush: Vec<_> = (0..BUTTERFLY_LATENCY)
-            .map(|_| u64_to_bitseq(0).concat(u64_to_bitseq(0)).concat(u64_to_bitseq(1)))
+            .map(|_| {
+                u64_to_bitseq(0)
+                    .concat(u64_to_bitseq(0))
+                    .concat(u64_to_bitseq(1))
+            })
             .collect();
 
         let all_inputs: Vec<_> = test_inputs.into_iter().chain(flush).collect();

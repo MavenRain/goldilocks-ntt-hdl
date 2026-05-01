@@ -8,8 +8,9 @@ repository = "https://github.com/MavenRain/goldilocks-ntt-hdl"
 
 [dependencies]
 comp-cat-rs = "0.5"
-hdl-cat = "0.8"
+hdl-cat = "0.9"
 hdl-cat-bits = "0.3"
+hdl-cat-circom = "0.6"
 hdl-cat-circuit = "0.3"
 hdl-cat-error = "0.3"
 hdl-cat-ir = "0.3"

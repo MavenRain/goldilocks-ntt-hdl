@@ -61,10 +61,7 @@ fn dif_ntt_recursive(
         // DIF butterfly: for each pair (a, b) across the two halves,
         //   u = a + b
         //   v = (a - b) * twiddle
-        let twiddles = std::iter::successors(
-            Some(GoldilocksElement::ONE),
-            |acc| Some(*acc * root),
-        );
+        let twiddles = std::iter::successors(Some(GoldilocksElement::ONE), |acc| Some(*acc * root));
 
         let (upper, lower): (Vec<_>, Vec<_>) = first_half
             .iter()
@@ -121,9 +118,9 @@ pub fn inverse_ntt(data: &[GoldilocksElement]) -> Result<Vec<GoldilocksElement>,
         let log_n = n.trailing_zeros();
         let root = primitive_root_of_unity(log_n)?;
         let root_inv = root.inverse()?;
-        let n_inv = GoldilocksElement::from(
-            u64::try_from(n).map_err(|e| Error::Field(e.to_string()))?
-        ).inverse()?;
+        let n_inv =
+            GoldilocksElement::from(u64::try_from(n).map_err(|e| Error::Field(e.to_string()))?)
+                .inverse()?;
 
         // Step 1: Bit-reverse input (undo forward DIF's bit-reversal)
         let br_input = bit_reverse_permutation(data)?;
@@ -148,18 +145,14 @@ pub fn bit_reverse_permutation(
 ) -> Result<Vec<GoldilocksElement>, Error> {
     let n = data.len();
     if n == 0 || (n & (n - 1)) != 0 {
-        Err(Error::Field(format!(
-            "length {n} is not a power of two"
-        )))
+        Err(Error::Field(format!("length {n} is not a power of two")))
     } else {
         let log_n = n.trailing_zeros();
         (0..n)
             .map(|i| {
-                let i_u64 = u64::try_from(i)
-                    .map_err(|e| Error::Field(e.to_string()))?;
+                let i_u64 = u64::try_from(i).map_err(|e| Error::Field(e.to_string()))?;
                 let rev = bit_reverse(i_u64, log_n);
-                let rev_idx = usize::try_from(rev)
-                    .map_err(|e| Error::Field(e.to_string()))?;
+                let rev_idx = usize::try_from(rev).map_err(|e| Error::Field(e.to_string()))?;
                 data.get(rev_idx)
                     .copied()
                     .ok_or_else(|| Error::Field(format!("index {rev_idx} out of bounds")))
@@ -171,9 +164,7 @@ pub fn bit_reverse_permutation(
 /// Reverse the lowest `bits` bits of `value`.
 #[must_use]
 fn bit_reverse(value: u64, bits: u32) -> u64 {
-    (0..bits).fold(0_u64, |acc, i| {
-        acc | (((value >> i) & 1) << (bits - 1 - i))
-    })
+    (0..bits).fold(0_u64, |acc, i| acc | (((value >> i) & 1) << (bits - 1 - i)))
 }
 
 #[cfg(test)]
@@ -185,7 +176,14 @@ mod tests {
         let data = vec![GoldilocksElement::new(42)];
         let result = dif_ntt(&data)?;
         assert_eq!(result.len(), 1);
-        assert_eq!(result.first().copied().unwrap_or(GoldilocksElement::ZERO).value(), 42);
+        assert_eq!(
+            result
+                .first()
+                .copied()
+                .unwrap_or(GoldilocksElement::ZERO)
+                .value(),
+            42
+        );
         Ok(())
     }
 
@@ -198,7 +196,14 @@ mod tests {
         // output[0] = a + b = 8
         // output[1] = (a - b) * w^0 = a - b = p - 2
         assert_eq!(result.len(), 2);
-        assert_eq!(result.first().copied().unwrap_or(GoldilocksElement::ZERO).value(), 8);
+        assert_eq!(
+            result
+                .first()
+                .copied()
+                .unwrap_or(GoldilocksElement::ZERO)
+                .value(),
+            8
+        );
         Ok(())
     }
 
@@ -213,24 +218,25 @@ mod tests {
 
     #[test]
     fn ntt_inverse_round_trip_size_8() -> Result<(), Error> {
-        let original: Vec<_> = (1..=8)
-            .map(GoldilocksElement::new)
-            .collect();
+        let original: Vec<_> = (1..=8).map(GoldilocksElement::new).collect();
 
         // Forward DIF NTT (bit-reversed output)
         let forward = dif_ntt(&original)?;
         // Inverse NTT recovers original
         let recovered = inverse_ntt(&forward)?;
 
-        original.iter().zip(recovered.iter()).try_for_each(|(orig, rec)| {
-            if orig == rec {
-                Ok(())
-            } else {
-                Err(Error::Field(format!(
-                    "round-trip mismatch: original {orig}, recovered {rec}"
-                )))
-            }
-        })
+        original
+            .iter()
+            .zip(recovered.iter())
+            .try_for_each(|(orig, rec)| {
+                if orig == rec {
+                    Ok(())
+                } else {
+                    Err(Error::Field(format!(
+                        "round-trip mismatch: original {orig}, recovered {rec}"
+                    )))
+                }
+            })
     }
 
     #[test]
@@ -255,9 +261,7 @@ mod tests {
 
     #[test]
     fn bit_reverse_permutation_is_involution() -> Result<(), Error> {
-        let data: Vec<_> = (0..8)
-            .map(GoldilocksElement::new)
-            .collect();
+        let data: Vec<_> = (0..8).map(GoldilocksElement::new).collect();
         let once = bit_reverse_permutation(&data)?;
         let twice = bit_reverse_permutation(&once)?;
         assert_eq!(data, twice);

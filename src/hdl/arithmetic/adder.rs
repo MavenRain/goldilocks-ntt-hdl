@@ -89,8 +89,16 @@ pub fn goldilocks_add_comb() -> Result<GoldilocksAddArrow, Error> {
     let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![sum64, wrap_corr], sum_plus_wrap)?;
     let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![sum64, prime_wire], sum_lt_prime)?;
     let bld = bld.with_instruction(Op::Not, vec![sum_lt_prime], sum_ge_prime)?;
-    let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![sum64, prime_wire], sum_minus_prime)?;
-    let bld = bld.with_instruction(Op::Mux, vec![sum_ge_prime, sum64, sum_minus_prime], temp_adj)?;
+    let bld = bld.with_instruction(
+        Op::Bin(BinOp::Sub),
+        vec![sum64, prime_wire],
+        sum_minus_prime,
+    )?;
+    let bld = bld.with_instruction(
+        Op::Mux,
+        vec![sum_ge_prime, sum64, sum_minus_prime],
+        temp_adj,
+    )?;
     let bld = bld.with_instruction(Op::Mux, vec![overflow, temp_adj, sum_plus_wrap], adjusted)?;
 
     // Second check: adjusted >= prime as !(adjusted < prime)
@@ -98,7 +106,11 @@ pub fn goldilocks_add_comb() -> Result<GoldilocksAddArrow, Error> {
     let bld = bld.with_instruction(Op::Not, vec![adj_lt_prime], ge_prime)?;
 
     // Final result: ge_prime ? adjusted - prime : adjusted
-    let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![adjusted, prime_wire], adj_minus_prime)?;
+    let bld = bld.with_instruction(
+        Op::Bin(BinOp::Sub),
+        vec![adjusted, prime_wire],
+        adj_minus_prime,
+    )?;
     let bld = bld.with_instruction(Op::Mux, vec![ge_prime, adjusted, adj_minus_prime], result)?;
 
     Ok(CircuitArrow::from_raw_parts(
@@ -120,7 +132,9 @@ pub fn goldilocks_add_sync() -> Result<GoldilocksAddSync, Error> {
     let comb = goldilocks_add_comb()?;
     let lifted = Sync::lift_comb(comb);
     let (graph, inputs, outputs, init, sc) = lifted.into_parts();
-    Ok(hdl_cat_sync::machine::from_raw(graph, inputs, outputs, init, sc))
+    Ok(hdl_cat_sync::machine::from_raw(
+        graph, inputs, outputs, init, sc,
+    ))
 }
 
 #[cfg(test)]
@@ -128,32 +142,32 @@ mod tests {
     use super::*;
     use hdl_cat_sim::Testbench;
 
-
     /// Test adder correctness via sync wrapper.
     #[test]
     fn adder_basic() -> Result<(), Error> {
         let adder = goldilocks_add_sync()?;
 
-        let test_cases: Vec<(u64, u64, u64)> = vec![
-            (0, 0, 0),
-            (1, 2, 3),
-            (10, 20, 30),
-            (100, 200, 300),
-        ];
+        let test_cases: Vec<(u64, u64, u64)> =
+            vec![(0, 0, 0), (1, 2, 3), (10, 20, 30), (100, 200, 300)];
 
-        let inputs: Vec<_> = test_cases.iter().map(|&(a, b, _)| {
-            crate::hdl::common::u64_to_bitseq(a)
-                .concat(crate::hdl::common::u64_to_bitseq(b))
-        }).collect();
+        let inputs: Vec<_> = test_cases
+            .iter()
+            .map(|&(a, b, _)| {
+                crate::hdl::common::u64_to_bitseq(a).concat(crate::hdl::common::u64_to_bitseq(b))
+            })
+            .collect();
 
         let testbench = Testbench::new(adder);
         let results = testbench.run(inputs).run()?;
 
-        test_cases.iter().zip(results.iter()).try_for_each(|(&(_, _, expected), sample)| {
-            let output_val = crate::hdl::common::bitseq_to_u64(sample.value())?;
-            assert_eq!(output_val, expected);
-            Ok::<(), hdl_cat_error::Error>(())
-        })?;
+        test_cases
+            .iter()
+            .zip(results.iter())
+            .try_for_each(|(&(_, _, expected), sample)| {
+                let output_val = crate::hdl::common::bitseq_to_u64(sample.value())?;
+                assert_eq!(output_val, expected);
+                Ok::<(), hdl_cat_error::Error>(())
+            })?;
 
         Ok(())
     }
@@ -164,26 +178,30 @@ mod tests {
         let p = GOLDILOCKS_PRIME_U64;
 
         let test_cases: Vec<(u64, u64, u64)> = vec![
-            (p - 1, 1, 0),           // sum = p, should reduce to 0
-            (p - 1, 2, 1),           // sum = p + 1, should reduce to 1
-            (p - 1, p - 1, p - 2),   // sum = 2p - 2, should reduce to p - 2
+            (p - 1, 1, 0),         // sum = p, should reduce to 0
+            (p - 1, 2, 1),         // sum = p + 1, should reduce to 1
+            (p - 1, p - 1, p - 2), // sum = 2p - 2, should reduce to p - 2
         ];
 
-        let inputs: Vec<_> = test_cases.iter().map(|&(a, b, _)| {
-            crate::hdl::common::u64_to_bitseq(a)
-                .concat(crate::hdl::common::u64_to_bitseq(b))
-        }).collect();
+        let inputs: Vec<_> = test_cases
+            .iter()
+            .map(|&(a, b, _)| {
+                crate::hdl::common::u64_to_bitseq(a).concat(crate::hdl::common::u64_to_bitseq(b))
+            })
+            .collect();
 
         let testbench = Testbench::new(adder);
         let results = testbench.run(inputs).run()?;
 
-        test_cases.iter().zip(results.iter()).try_for_each(|(&(_, _, expected), sample)| {
-            let output_val = crate::hdl::common::bitseq_to_u64(sample.value())?;
-            assert_eq!(output_val, expected);
-            Ok::<(), hdl_cat_error::Error>(())
-        })?;
+        test_cases
+            .iter()
+            .zip(results.iter())
+            .try_for_each(|(&(_, _, expected), sample)| {
+                let output_val = crate::hdl::common::bitseq_to_u64(sample.value())?;
+                assert_eq!(output_val, expected);
+                Ok::<(), hdl_cat_error::Error>(())
+            })?;
 
         Ok(())
     }
-
 }

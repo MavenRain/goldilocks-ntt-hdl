@@ -7,8 +7,8 @@
 use goldilocks_ntt_hdl::error::Error;
 use goldilocks_ntt_hdl::field::element::GoldilocksElement;
 use goldilocks_ntt_hdl::golden::reference::dif_ntt;
+use goldilocks_ntt_hdl::hdl::pipeline::{emit_pipeline_verilog, emit_size_4_pipeline_verilog};
 use goldilocks_ntt_hdl::sim::runner::{SimConfig, simulate_pipeline};
-use goldilocks_ntt_hdl::hdl::pipeline::{emit_size_4_pipeline_verilog, emit_pipeline_verilog};
 
 /// Compare SDF simulation output with the golden model.
 ///
@@ -32,13 +32,9 @@ fn verify_full_pipeline(log_n: u32) -> Result<(), Error> {
 
     // Feed two frames through the simulation.  The first frame
     // primes the delay lines; the second frame produces a valid NTT.
-    let two_frames: Vec<GoldilocksElement> = input.iter()
-        .chain(input.iter())
-        .copied()
-        .collect();
+    let two_frames: Vec<GoldilocksElement> = input.iter().chain(input.iter()).copied().collect();
 
-    let num_stages = usize::try_from(log_n)
-        .map_err(|e| Error::Field(e.to_string()))?;
+    let num_stages = usize::try_from(log_n).map_err(|e| Error::Field(e.to_string()))?;
     let config = SimConfig::new(two_frames, num_stages)?;
     let sim_output = simulate_pipeline(config).run()?;
 
@@ -55,10 +51,8 @@ fn verify_full_pipeline(log_n: u32) -> Result<(), Error> {
 
     // NTT is a bijection on the field, so outputs are distinct.
     // Compare as sets to ignore the SDF output permutation.
-    let sim_set: std::collections::BTreeSet<u64> =
-        second_frame.iter().map(|e| e.value()).collect();
-    let golden_set: std::collections::BTreeSet<u64> =
-        golden.iter().map(|e| e.value()).collect();
+    let sim_set: std::collections::BTreeSet<u64> = second_frame.iter().map(|e| e.value()).collect();
+    let golden_set: std::collections::BTreeSet<u64> = golden.iter().map(|e| e.value()).collect();
 
     if sim_set == golden_set {
         Ok(())
@@ -80,37 +74,41 @@ fn passthrough_preserves_data() -> Result<(), Error> {
     let config = SimConfig::new(input.clone(), 0)?;
     let result = simulate_pipeline(config).run()?;
 
-    input.iter().zip(result.iter()).try_for_each(|(expected, actual)| {
-        if expected == actual {
-            Ok(())
-        } else {
-            Err(Error::Field(format!(
-                "passthrough mismatch: expected {expected}, got {actual}"
-            )))
-        }
-    })
+    input
+        .iter()
+        .zip(result.iter())
+        .try_for_each(|(expected, actual)| {
+            if expected == actual {
+                Ok(())
+            } else {
+                Err(Error::Field(format!(
+                    "passthrough mismatch: expected {expected}, got {actual}"
+                )))
+            }
+        })
 }
 
 #[test]
 fn golden_model_round_trip_size_16() -> Result<(), Error> {
     use goldilocks_ntt_hdl::golden::reference::inverse_ntt;
 
-    let input: Vec<GoldilocksElement> = (1..=16)
-        .map(GoldilocksElement::new)
-        .collect();
+    let input: Vec<GoldilocksElement> = (1..=16).map(GoldilocksElement::new).collect();
 
     let forward = dif_ntt(&input)?;
     let recovered = inverse_ntt(&forward)?;
 
-    input.iter().zip(recovered.iter()).try_for_each(|(orig, rec)| {
-        if orig == rec {
-            Ok(())
-        } else {
-            Err(Error::Field(format!(
-                "round-trip mismatch: original {orig}, recovered {rec}"
-            )))
-        }
-    })
+    input
+        .iter()
+        .zip(recovered.iter())
+        .try_for_each(|(orig, rec)| {
+            if orig == rec {
+                Ok(())
+            } else {
+                Err(Error::Field(format!(
+                    "round-trip mismatch: original {orig}, recovered {rec}"
+                )))
+            }
+        })
 }
 
 #[test]
@@ -133,7 +131,8 @@ fn hdl_cat_size_4_simulation_basic() -> Result<(), Error> {
 #[test]
 fn verilog_emission_produces_output() -> Result<(), Error> {
     let verilog_io = emit_size_4_pipeline_verilog()?;
-    let verilog_text = verilog_io.run()
+    let verilog_text = verilog_io
+        .run()
         .map_err(|e| Error::VerilogGen(e.to_string()))?;
 
     assert!(!verilog_text.is_empty());
@@ -161,13 +160,20 @@ fn ntt_correctness_size_16() -> Result<(), Error> {
 #[test]
 fn bram_verilog_emission_size_4() -> Result<(), Error> {
     let verilog_io = emit_pipeline_verilog(&[2, 1], "bram_ntt_size_4")?;
-    let text = verilog_io.run()
+    let text = verilog_io
+        .run()
         .map_err(|e| Error::VerilogGen(e.to_string()))?;
 
     assert!(text.contains("module bram_ntt_size_4"));
     // Two stages produce two auto-detected array declarations.
-    assert!(text.match_indices("[0:1]").count() >= 1, "missing depth-2 array decl");
-    assert!(text.match_indices("[0:0]").count() >= 1, "missing depth-1 array decl");
+    assert!(
+        text.match_indices("[0:1]").count() >= 1,
+        "missing depth-2 array decl"
+    );
+    assert!(
+        text.match_indices("[0:0]").count() >= 1,
+        "missing depth-1 array decl"
+    );
 
     // Write to target/ for manual inspection / Vivado ingestion
     std::fs::write("target/bram_ntt_size_4.v", &text)
@@ -179,13 +185,17 @@ fn bram_verilog_emission_size_4() -> Result<(), Error> {
 #[test]
 fn bram_verilog_emission_size_8() -> Result<(), Error> {
     let verilog_io = emit_pipeline_verilog(&[4, 2, 1], "bram_ntt_size_8")?;
-    let text = verilog_io.run()
+    let text = verilog_io
+        .run()
         .map_err(|e| Error::VerilogGen(e.to_string()))?;
 
     assert!(text.contains("module bram_ntt_size_8"));
     // Three stages produce three auto-detected array declarations.
     let arr_decl_count = text.match_indices("reg [63:0]").count();
-    assert!(arr_decl_count >= 3, "expected >= 3 array decls, got {arr_decl_count}");
+    assert!(
+        arr_decl_count >= 3,
+        "expected >= 3 array decls, got {arr_decl_count}"
+    );
 
     std::fs::write("target/bram_ntt_size_8.v", &text)
         .map_err(|e| Error::VerilogGen(e.to_string()))?;
@@ -207,27 +217,43 @@ fn bram_verilog_emission_10_stage() -> Result<(), Error> {
     let depths: Vec<usize> = (0..10).map(|j| 1_usize << (9 - j)).collect();
 
     let verilog_io = emit_pipeline_verilog(&depths, "goldilocks_ntt_1024")?;
-    let text = verilog_io.run()
+    let text = verilog_io
+        .run()
         .map_err(|e| Error::VerilogGen(e.to_string()))?;
 
     // Basic structural checks
-    assert!(text.contains("module goldilocks_ntt_1024"), "missing module declaration");
+    assert!(
+        text.contains("module goldilocks_ntt_1024"),
+        "missing module declaration"
+    );
     assert!(text.contains("input clk"), "missing clk port");
     assert!(text.contains("input rst"), "missing rst port");
 
     // All 10 stage delay arrays present (auto-detected from Array-typed state wires).
     let arr_decl_count = text.match_indices("reg [63:0]").count();
-    assert!(arr_decl_count >= 10, "expected >= 10 array decls, got {arr_decl_count}");
+    assert!(
+        arr_decl_count >= 10,
+        "expected >= 10 array decls, got {arr_decl_count}"
+    );
 
     // Stages with depth > 32 use circular buffer (pointer register).
-    assert!(text.contains("_ptr"), "missing circular buffer pointer for large-depth stages");
+    assert!(
+        text.contains("_ptr"),
+        "missing circular buffer pointer for large-depth stages"
+    );
 
     // At least one shift-register line for small-depth stages.
-    assert!(text.contains("[1] <="), "missing shift-register line for small-depth stages");
+    assert!(
+        text.contains("[1] <="),
+        "missing shift-register line for small-depth stages"
+    );
 
     // Circular buffer keeps output compact: well under 100K lines
     let line_count = text.lines().count();
-    assert!(line_count < 100_000, "emitted {line_count} lines; should be compact");
+    assert!(
+        line_count < 100_000,
+        "emitted {line_count} lines; should be compact"
+    );
 
     std::fs::write("target/goldilocks_ntt_1024.v", &text)
         .map_err(|e| Error::VerilogGen(e.to_string()))?;
@@ -248,17 +274,24 @@ fn bram_verilog_emission_24_stage() -> Result<(), Error> {
     let depths: Vec<usize> = (0..24).map(|j| 1_usize << (23 - j)).collect();
 
     let verilog_io = emit_pipeline_verilog(&depths, "goldilocks_ntt_2_24")?;
-    let text = verilog_io.run()
+    let text = verilog_io
+        .run()
         .map_err(|e| Error::VerilogGen(e.to_string()))?;
 
     // Basic structural checks.
-    assert!(text.contains("module goldilocks_ntt_2_24"), "missing module declaration");
+    assert!(
+        text.contains("module goldilocks_ntt_2_24"),
+        "missing module declaration"
+    );
     assert!(text.contains("input clk"), "missing clk port");
     assert!(text.contains("input rst"), "missing rst port");
 
     // All 24 stage delay arrays present.
     let arr_decl_count = text.match_indices("reg [63:0]").count();
-    assert!(arr_decl_count >= 24, "expected >= 24 array decls, got {arr_decl_count}");
+    assert!(
+        arr_decl_count >= 24,
+        "expected >= 24 array decls, got {arr_decl_count}"
+    );
 
     // Large-depth stages use circular buffer.
     assert!(text.contains("_ptr"), "missing circular buffer pointers");
@@ -268,7 +301,10 @@ fn bram_verilog_emission_24_stage() -> Result<(), Error> {
 
     // Output should be compact (circular buffers are O(1) per stage).
     let line_count = text.lines().count();
-    assert!(line_count < 200_000, "emitted {line_count} lines; should be compact");
+    assert!(
+        line_count < 200_000,
+        "emitted {line_count} lines; should be compact"
+    );
 
     std::fs::write("target/goldilocks_ntt_2_24.v", &text)
         .map_err(|e| Error::VerilogGen(e.to_string()))?;
@@ -279,7 +315,7 @@ fn bram_verilog_emission_24_stage() -> Result<(), Error> {
 #[test]
 fn basic_arithmetic_integration_test() -> Result<(), hdl_cat_error::Error> {
     use goldilocks_ntt_hdl::hdl::arithmetic::{goldilocks_add_sync, goldilocks_mul_sync};
-    use goldilocks_ntt_hdl::hdl::common::{u64_to_bitseq, bitseq_to_u64};
+    use goldilocks_ntt_hdl::hdl::common::{bitseq_to_u64, u64_to_bitseq};
     use hdl_cat_sim::Testbench;
 
     // Test adder end-to-end

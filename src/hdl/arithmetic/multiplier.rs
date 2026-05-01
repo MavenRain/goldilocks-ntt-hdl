@@ -8,7 +8,7 @@
 use hdl_cat_bits::Bits;
 use hdl_cat_circuit::{CircuitArrow, CircuitTensor, Obj};
 use hdl_cat_error::Error;
-use hdl_cat_sync::{compose_sync, Sync};
+use hdl_cat_sync::{Sync, compose_sync};
 
 use crate::hdl::goldilocks_reduce::goldilocks_mul_reduce_arrow;
 
@@ -76,7 +76,9 @@ pub fn goldilocks_mul_sync() -> Result<GoldilocksMulSync, Error> {
     let comb = goldilocks_mul_comb()?;
     let lifted = Sync::lift_comb(comb);
     let (graph, inputs, outputs, init, sc) = lifted.into_parts();
-    Ok(hdl_cat_sync::machine::from_raw(graph, inputs, outputs, init, sc))
+    Ok(hdl_cat_sync::machine::from_raw(
+        graph, inputs, outputs, init, sc,
+    ))
 }
 
 /// A single-element delay stage.
@@ -86,7 +88,9 @@ type DelayStage = Sync<Obj<GoldilocksElement>, Obj<GoldilocksElement>, Obj<Goldi
 fn delay_stage() -> Result<DelayStage, Error> {
     let delay = crate::hdl::delay::delay_n::<GoldilocksElement>(1)?;
     let (graph, inputs, outputs, init, sc) = delay.into_parts();
-    Ok(hdl_cat_sync::machine::from_raw(graph, inputs, outputs, init, sc))
+    Ok(hdl_cat_sync::machine::from_raw(
+        graph, inputs, outputs, init, sc,
+    ))
 }
 
 /// Construct a 7-cycle pipelined Goldilocks modular multiplier.
@@ -125,32 +129,32 @@ mod tests {
     use super::*;
     use hdl_cat_sim::Testbench;
 
-
     /// Test multiplier correctness via sync wrapper.
     #[test]
     fn mul_basic() -> Result<(), Error> {
         let mul = goldilocks_mul_sync()?;
 
-        let test_cases: Vec<(u64, u64, u64)> = vec![
-            (0, 0, 0),
-            (1, 42, 42),
-            (3, 5, 15),
-            (7, 11, 77),
-        ];
+        let test_cases: Vec<(u64, u64, u64)> =
+            vec![(0, 0, 0), (1, 42, 42), (3, 5, 15), (7, 11, 77)];
 
-        let inputs: Vec<_> = test_cases.iter().map(|&(a, b, _)| {
-            crate::hdl::common::u64_to_bitseq(a)
-                .concat(crate::hdl::common::u64_to_bitseq(b))
-        }).collect();
+        let inputs: Vec<_> = test_cases
+            .iter()
+            .map(|&(a, b, _)| {
+                crate::hdl::common::u64_to_bitseq(a).concat(crate::hdl::common::u64_to_bitseq(b))
+            })
+            .collect();
 
         let testbench = Testbench::new(mul);
         let results = testbench.run(inputs).run()?;
 
-        test_cases.iter().zip(results.iter()).try_for_each(|(&(_, _, expected), sample)| {
-            let output_val = crate::hdl::common::bitseq_to_u64(sample.value())?;
-            assert_eq!(output_val, expected);
-            Ok::<(), hdl_cat_error::Error>(())
-        })?;
+        test_cases
+            .iter()
+            .zip(results.iter())
+            .try_for_each(|(&(_, _, expected), sample)| {
+                let output_val = crate::hdl::common::bitseq_to_u64(sample.value())?;
+                assert_eq!(output_val, expected);
+                Ok::<(), hdl_cat_error::Error>(())
+            })?;
 
         Ok(())
     }

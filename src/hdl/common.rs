@@ -38,25 +38,24 @@ pub fn bitseq_to_u64(seq: &BitSeq) -> Result<u64, hdl_cat_error::Error> {
             actual: hdl_cat_error::Width::new(u32::try_from(seq.len()).unwrap_or(u32::MAX)),
         })
     } else {
-        Ok((0..seq.len().min(64)).fold(0u64, |acc, i| {
-            if seq.bit(i) { acc | (1u64 << i) } else { acc }
-        }))
+        Ok((0..seq.len().min(64)).fold(
+            0u64,
+            |acc, i| {
+                if seq.bit(i) { acc | (1u64 << i) } else { acc }
+            },
+        ))
     }
 }
 
 /// Create a [`BitSeq`] from a `u64` Goldilocks element value.
 pub fn u64_to_bitseq(val: u64) -> BitSeq {
-    let bits: Vec<bool> = (0..64)
-        .map(|i| (val >> i) & 1 == 1)
-        .collect();
+    let bits: Vec<bool> = (0..64).map(|i| (val >> i) & 1 == 1).collect();
     BitSeq::from_vec(bits)
 }
 
 /// Create a 128-bit [`BitSeq`] from a `u128` value.
 pub fn u128_to_bitseq(val: u128) -> BitSeq {
-    let bits: Vec<bool> = (0..128)
-        .map(|i| (val >> i) & 1 == 1)
-        .collect();
+    let bits: Vec<bool> = (0..128).map(|i| (val >> i) & 1 == 1).collect();
     BitSeq::from_vec(bits)
 }
 

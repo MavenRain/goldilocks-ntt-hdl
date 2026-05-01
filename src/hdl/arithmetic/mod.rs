@@ -11,15 +11,14 @@ pub mod multiplier;
 pub mod subtractor;
 
 pub use adder::{
-    goldilocks_add_comb, goldilocks_add_sync,
-    GoldilocksAddArrow, GoldilocksAddSync, AdderInput, AdderOutput,
+    AdderInput, AdderOutput, GoldilocksAddArrow, GoldilocksAddSync, goldilocks_add_comb,
+    goldilocks_add_sync,
 };
 pub use multiplier::{
-    goldilocks_mul_comb, goldilocks_mul_sync, goldilocks_mul_pipelined,
-    GoldilocksMulArrow, GoldilocksMulSync, GoldilocksMulPipelined,
-    MulInput, MulOutput, MULTIPLIER_LATENCY,
+    GoldilocksMulArrow, GoldilocksMulPipelined, GoldilocksMulSync, MULTIPLIER_LATENCY, MulInput,
+    MulOutput, goldilocks_mul_comb, goldilocks_mul_pipelined, goldilocks_mul_sync,
 };
 pub use subtractor::{
-    goldilocks_sub_comb, goldilocks_sub_sync,
-    GoldilocksSubArrow, GoldilocksSubSync, SubInput, SubOutput,
+    GoldilocksSubArrow, GoldilocksSubSync, SubInput, SubOutput, goldilocks_sub_comb,
+    goldilocks_sub_sync,
 };

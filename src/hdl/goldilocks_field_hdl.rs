@@ -20,8 +20,8 @@ use hdl_cat_ir::{BinOp, HdlGraphBuilder, Op, WireId, WireTy};
 use hdl_cat_kind::BitSeq;
 
 use crate::hdl::common::{
-    bitseq_to_u64, u128_to_bitseq, u64_to_bitseq, zeros_32_bitseq,
-    zeros_64_bitseq, GOLDILOCKS_PRIME_U128, GOLDILOCKS_PRIME_U64,
+    GOLDILOCKS_PRIME_U64, GOLDILOCKS_PRIME_U128, bitseq_to_u64, u64_to_bitseq, u128_to_bitseq,
+    zeros_32_bitseq, zeros_64_bitseq,
 };
 use crate::hdl::field_hdl::PrimeFieldHdl;
 
@@ -67,9 +67,7 @@ impl PrimeFieldHdl for Goldilocks {
         64
     }
 
-    fn alloc_constants(
-        bld: HdlGraphBuilder,
-    ) -> Result<(HdlGraphBuilder, Self::Constants), Error> {
+    fn alloc_constants(bld: HdlGraphBuilder) -> Result<(HdlGraphBuilder, Self::Constants), Error> {
         let (bld, p_64) = bld.with_wire(WireTy::Bits(64));
         let (bld, wrap_corr_64) = bld.with_wire(WireTy::Bits(64));
         let (bld, one_64) = bld.with_wire(WireTy::Bits(64));
@@ -203,25 +201,16 @@ impl PrimeFieldHdl for Goldilocks {
         let (bld, result) = bld.with_wire(WireTy::Bits(64));
 
         let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![a, b], sum64)?;
-        let bld =
-            bld.with_instruction(Op::Bin(BinOp::Lt), vec![sum64, a], add_overflow)?;
+        let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![sum64, a], add_overflow)?;
         let bld = bld.with_instruction(
             Op::Bin(BinOp::Add),
             vec![sum64, c.wrap_corr_64],
             sum_plus_wrap,
         )?;
-        let bld = bld.with_instruction(
-            Op::Bin(BinOp::Lt),
-            vec![sum64, c.p_64],
-            sum_lt_prime,
-        )?;
+        let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![sum64, c.p_64], sum_lt_prime)?;
+        let bld = bld.with_instruction(Op::Not, vec![sum_lt_prime], sum_ge_prime)?;
         let bld =
-            bld.with_instruction(Op::Not, vec![sum_lt_prime], sum_ge_prime)?;
-        let bld = bld.with_instruction(
-            Op::Bin(BinOp::Sub),
-            vec![sum64, c.p_64],
-            sum_minus_prime,
-        )?;
+            bld.with_instruction(Op::Bin(BinOp::Sub), vec![sum64, c.p_64], sum_minus_prime)?;
         let bld = bld.with_instruction(
             Op::Mux,
             vec![sum_ge_prime, sum64, sum_minus_prime],
@@ -232,18 +221,10 @@ impl PrimeFieldHdl for Goldilocks {
             vec![add_overflow, temp_adj, sum_plus_wrap],
             adjusted,
         )?;
-        let bld = bld.with_instruction(
-            Op::Bin(BinOp::Lt),
-            vec![adjusted, c.p_64],
-            adj_lt_prime,
-        )?;
+        let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![adjusted, c.p_64], adj_lt_prime)?;
+        let bld = bld.with_instruction(Op::Not, vec![adj_lt_prime], adj_ge_prime)?;
         let bld =
-            bld.with_instruction(Op::Not, vec![adj_lt_prime], adj_ge_prime)?;
-        let bld = bld.with_instruction(
-            Op::Bin(BinOp::Sub),
-            vec![adjusted, c.p_64],
-            adj_minus_prime,
-        )?;
+            bld.with_instruction(Op::Bin(BinOp::Sub), vec![adjusted, c.p_64], adj_minus_prime)?;
         let bld = bld.with_instruction(
             Op::Mux,
             vec![adj_ge_prime, adjusted, adj_minus_prime],
@@ -267,20 +248,15 @@ impl PrimeFieldHdl for Goldilocks {
         let (bld, diff_minus_corr) = bld.with_wire(WireTy::Bits(64));
         let (bld, result) = bld.with_wire(WireTy::Bits(64));
 
-        let bld =
-            bld.with_instruction(Op::Bin(BinOp::Sub), vec![a, b], diff64)?;
-        let bld =
-            bld.with_instruction(Op::Bin(BinOp::Lt), vec![a, b], underflow)?;
+        let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![a, b], diff64)?;
+        let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![a, b], underflow)?;
         let bld = bld.with_instruction(
             Op::Bin(BinOp::Sub),
             vec![diff64, c.wrap_corr_64],
             diff_minus_corr,
         )?;
-        let bld = bld.with_instruction(
-            Op::Mux,
-            vec![underflow, diff64, diff_minus_corr],
-            result,
-        )?;
+        let bld =
+            bld.with_instruction(Op::Mux, vec![underflow, diff64, diff_minus_corr], result)?;
 
         Ok((bld, result))
     }
@@ -312,16 +288,36 @@ impl PrimeFieldHdl for Goldilocks {
         let (bld, b_lo_64) = bld.with_wire(WireTy::Bits(64));
         let (bld, b_hi_64) = bld.with_wire(WireTy::Bits(64));
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 32, high_width: 32 }, vec![a_lo, c.zeros_32], a_lo_64,
+            Op::Concat {
+                low_width: 32,
+                high_width: 32,
+            },
+            vec![a_lo, c.zeros_32],
+            a_lo_64,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 32, high_width: 32 }, vec![a_hi, c.zeros_32], a_hi_64,
+            Op::Concat {
+                low_width: 32,
+                high_width: 32,
+            },
+            vec![a_hi, c.zeros_32],
+            a_hi_64,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 32, high_width: 32 }, vec![b_lo, c.zeros_32], b_lo_64,
+            Op::Concat {
+                low_width: 32,
+                high_width: 32,
+            },
+            vec![b_lo, c.zeros_32],
+            b_lo_64,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 32, high_width: 32 }, vec![b_hi, c.zeros_32], b_hi_64,
+            Op::Concat {
+                low_width: 32,
+                high_width: 32,
+            },
+            vec![b_hi, c.zeros_32],
+            b_hi_64,
         )?;
 
         // ── Four partial products (32x32 -> 64, exact) ──────────────
@@ -354,33 +350,75 @@ impl PrimeFieldHdl for Goldilocks {
         let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![pp1, pp2], cross_64)?;
         let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![cross_64, pp1], cross_carry)?;
         let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 32 }, vec![cross_64], cross_lo_32)?;
-        let bld = bld.with_instruction(Op::Slice { lo: 32, hi: 64 }, vec![cross_64], cross_hi_32)?;
+        let bld =
+            bld.with_instruction(Op::Slice { lo: 32, hi: 64 }, vec![cross_64], cross_hi_32)?;
 
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 32, high_width: 32 }, vec![c.zeros_32, cross_lo_32], cross_lo_shifted_64,
+            Op::Concat {
+                low_width: 32,
+                high_width: 32,
+            },
+            vec![c.zeros_32, cross_lo_32],
+            cross_lo_shifted_64,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 64, high_width: 64 }, vec![cross_lo_shifted_64, c.zeros_64], cross_lo_shifted_128,
+            Op::Concat {
+                low_width: 64,
+                high_width: 64,
+            },
+            vec![cross_lo_shifted_64, c.zeros_64],
+            cross_lo_shifted_128,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 32, high_width: 32 }, vec![cross_hi_32, c.zeros_32], cross_hi_64,
+            Op::Concat {
+                low_width: 32,
+                high_width: 32,
+            },
+            vec![cross_hi_32, c.zeros_32],
+            cross_hi_64,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 64, high_width: 64 }, vec![c.zeros_64, cross_hi_64], cross_hi_128,
+            Op::Concat {
+                low_width: 64,
+                high_width: 64,
+            },
+            vec![c.zeros_64, cross_hi_64],
+            cross_hi_128,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 64, high_width: 64 }, vec![pp0, c.zeros_64], pp0_128,
+            Op::Concat {
+                low_width: 64,
+                high_width: 64,
+            },
+            vec![pp0, c.zeros_64],
+            pp0_128,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 64, high_width: 64 }, vec![c.zeros_64, pp3], pp3_128,
+            Op::Concat {
+                low_width: 64,
+                high_width: 64,
+            },
+            vec![c.zeros_64, pp3],
+            pp3_128,
         )?;
         let bld = bld.with_instruction(
-            Op::Mux, vec![cross_carry, c.zero_128, c.carry_96_const], carry_contrib,
+            Op::Mux,
+            vec![cross_carry, c.zero_128, c.carry_96_const],
+            carry_contrib,
         )?;
-        let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![pp0_128, cross_lo_shifted_128], prod_s1)?;
-        let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![prod_s1, cross_hi_128], prod_s2)?;
+        let bld = bld.with_instruction(
+            Op::Bin(BinOp::Add),
+            vec![pp0_128, cross_lo_shifted_128],
+            prod_s1,
+        )?;
+        let bld =
+            bld.with_instruction(Op::Bin(BinOp::Add), vec![prod_s1, cross_hi_128], prod_s2)?;
         let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![prod_s2, pp3_128], prod_s3)?;
-        let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![prod_s3, carry_contrib], product_128)?;
+        let bld = bld.with_instruction(
+            Op::Bin(BinOp::Add),
+            vec![prod_s3, carry_contrib],
+            product_128,
+        )?;
 
         // ── Solinas reduction: 128-bit -> 64-bit ────────────────────
         // Extract 32-bit limbs: product = a0 + a1*2^32 + a2*2^64 + a3*2^96
@@ -404,22 +442,52 @@ impl PrimeFieldHdl for Goldilocks {
         let (bld, r_a2_128) = bld.with_wire(WireTy::Bits(128));
         let (bld, r_a3_128) = bld.with_wire(WireTy::Bits(128));
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 32, high_width: 32 }, vec![r_a1, c.zeros_32], r_a1_64,
+            Op::Concat {
+                low_width: 32,
+                high_width: 32,
+            },
+            vec![r_a1, c.zeros_32],
+            r_a1_64,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 64, high_width: 64 }, vec![r_a1_64, c.zeros_64], r_a1_128,
+            Op::Concat {
+                low_width: 64,
+                high_width: 64,
+            },
+            vec![r_a1_64, c.zeros_64],
+            r_a1_128,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 32, high_width: 32 }, vec![r_a2, c.zeros_32], r_a2_64,
+            Op::Concat {
+                low_width: 32,
+                high_width: 32,
+            },
+            vec![r_a2, c.zeros_32],
+            r_a2_64,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 64, high_width: 64 }, vec![r_a2_64, c.zeros_64], r_a2_128,
+            Op::Concat {
+                low_width: 64,
+                high_width: 64,
+            },
+            vec![r_a2_64, c.zeros_64],
+            r_a2_128,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 32, high_width: 32 }, vec![r_a3, c.zeros_32], r_a3_64,
+            Op::Concat {
+                low_width: 32,
+                high_width: 32,
+            },
+            vec![r_a3, c.zeros_32],
+            r_a3_64,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 64, high_width: 64 }, vec![r_a3_64, c.zeros_64], r_a3_128,
+            Op::Concat {
+                low_width: 64,
+                high_width: 64,
+            },
+            vec![r_a3_64, c.zeros_64],
+            r_a3_128,
         )?;
 
         // cross = a1 + a2
@@ -427,19 +495,39 @@ impl PrimeFieldHdl for Goldilocks {
         let (bld, r_cross_lo) = bld.with_wire(WireTy::Bits(32));
         let (bld, r_cross_carry_32) = bld.with_wire(WireTy::Bits(32));
         let (bld, r_cross_carry_bit) = bld.with_wire(WireTy::Bit);
-        let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![r_a1_128, r_a2_128], r_cross_128)?;
-        let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 32 }, vec![r_cross_128], r_cross_lo)?;
-        let bld = bld.with_instruction(Op::Slice { lo: 32, hi: 64 }, vec![r_cross_128], r_cross_carry_32)?;
-        let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 1 }, vec![r_cross_carry_32], r_cross_carry_bit)?;
+        let bld =
+            bld.with_instruction(Op::Bin(BinOp::Add), vec![r_a1_128, r_a2_128], r_cross_128)?;
+        let bld =
+            bld.with_instruction(Op::Slice { lo: 0, hi: 32 }, vec![r_cross_128], r_cross_lo)?;
+        let bld = bld.with_instruction(
+            Op::Slice { lo: 32, hi: 64 },
+            vec![r_cross_128],
+            r_cross_carry_32,
+        )?;
+        let bld = bld.with_instruction(
+            Op::Slice { lo: 0, hi: 1 },
+            vec![r_cross_carry_32],
+            r_cross_carry_bit,
+        )?;
 
         // partial = Concat(a0, cross_lo)
         let (bld, r_partial_64) = bld.with_wire(WireTy::Bits(64));
         let (bld, r_partial_128) = bld.with_wire(WireTy::Bits(128));
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 32, high_width: 32 }, vec![r_a0, r_cross_lo], r_partial_64,
+            Op::Concat {
+                low_width: 32,
+                high_width: 32,
+            },
+            vec![r_a0, r_cross_lo],
+            r_partial_64,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 64, high_width: 64 }, vec![r_partial_64, c.zeros_64], r_partial_128,
+            Op::Concat {
+                low_width: 64,
+                high_width: 64,
+            },
+            vec![r_partial_64, c.zeros_64],
+            r_partial_128,
         )?;
 
         // Carry correction and accumulate with bias (add p to stay positive)
@@ -449,9 +537,15 @@ impl PrimeFieldHdl for Goldilocks {
         let (bld, r_acc3) = bld.with_wire(WireTy::Bits(128));
         let (bld, r_acc4) = bld.with_wire(WireTy::Bits(128));
         let bld = bld.with_instruction(
-            Op::Mux, vec![r_cross_carry_bit, c.zero_128, c.corr_128], r_carry_corr,
+            Op::Mux,
+            vec![r_cross_carry_bit, c.zero_128, c.corr_128],
+            r_carry_corr,
         )?;
-        let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![r_partial_128, c.two_p_128], r_acc1)?;
+        let bld = bld.with_instruction(
+            Op::Bin(BinOp::Add),
+            vec![r_partial_128, c.two_p_128],
+            r_acc1,
+        )?;
         let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![r_acc1, r_a2_128], r_acc2)?;
         let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![r_acc2, r_a3_128], r_acc3)?;
         let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![r_acc3, r_carry_corr], r_acc4)?;
@@ -474,7 +568,11 @@ impl PrimeFieldHdl for Goldilocks {
         let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![r_step1, c.p_128], r_below_p)?;
         let bld = bld.with_instruction(Op::Not, vec![r_below_p], r_at_least_p)?;
         let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![r_step1, c.p_128], r_step2_sub)?;
-        let bld = bld.with_instruction(Op::Mux, vec![r_at_least_p, r_step1, r_step2_sub], r_result_128)?;
+        let bld = bld.with_instruction(
+            Op::Mux,
+            vec![r_at_least_p, r_step1, r_step2_sub],
+            r_result_128,
+        )?;
         let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 64 }, vec![r_result_128], result)?;
 
         Ok((bld, result))
@@ -512,10 +610,7 @@ mod tests {
 
     #[test]
     fn goldilocks_prime_matches() {
-        assert_eq!(
-            Goldilocks::prime_u128(),
-            0xFFFF_FFFF_0000_0001_u128
-        );
+        assert_eq!(Goldilocks::prime_u128(), 0xFFFF_FFFF_0000_0001_u128);
     }
 
     #[test]

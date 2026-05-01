@@ -19,13 +19,13 @@
 //! the fully pipelined SDF architecture.  Actual numbers depend on
 //! synthesis results and target device.
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 
 use goldilocks_ntt_hdl::field::element::GoldilocksElement;
 use goldilocks_ntt_hdl::golden::reference::dif_ntt;
 use goldilocks_ntt_hdl::hdl::stage::sdf_stage_generic;
 use goldilocks_ntt_hdl::hdl::{BabyBear, PrimeFieldHdl};
-use goldilocks_ntt_hdl::sim::runner::{simulate_pipeline, SimConfig};
+use goldilocks_ntt_hdl::sim::runner::{SimConfig, simulate_pipeline};
 use hdl_cat_kind::BitSeq;
 use hdl_cat_sim::Testbench;
 
@@ -65,8 +65,7 @@ fn bench_hdl_cat_sim_size_16(c: &mut Criterion) {
             || input.clone(),
             |data| {
                 black_box(
-                    SimConfig::new(data, LOG_N_SMALL)
-                        .and_then(|cfg| simulate_pipeline(cfg).run()),
+                    SimConfig::new(data, LOG_N_SMALL).and_then(|cfg| simulate_pipeline(cfg).run()),
                 )
             },
             BatchSize::SmallInput,

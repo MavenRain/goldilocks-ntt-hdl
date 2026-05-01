@@ -107,43 +107,47 @@ impl BabyBear {
 
         let (bld, t_lo_64) = bld.with_wire(WireTy::Bits(64));
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 31, high_width: 33 },
+            Op::Concat {
+                low_width: 31,
+                high_width: 33,
+            },
             vec![t_lo, c.zeros_33],
             t_lo_64,
         )?;
 
         let (bld, t_hi_64) = bld.with_wire(WireTy::Bits(64));
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 33, high_width: 31 },
+            Op::Concat {
+                low_width: 33,
+                high_width: 31,
+            },
             vec![t_hi, c.zeros_31],
             t_hi_64,
         )?;
 
         let (bld, t_hi_37) = bld.with_wire(WireTy::Bits(37));
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 33, high_width: 4 },
+            Op::Concat {
+                low_width: 33,
+                high_width: 4,
+            },
             vec![t_hi, c.zeros_4],
             t_hi_37,
         )?;
         let (bld, t_hi_shl_27) = bld.with_wire(WireTy::Bits(64));
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 27, high_width: 37 },
+            Op::Concat {
+                low_width: 27,
+                high_width: 37,
+            },
             vec![c.zeros_27, t_hi_37],
             t_hi_shl_27,
         )?;
 
         let (bld, sum) = bld.with_wire(WireTy::Bits(64));
-        let bld = bld.with_instruction(
-            Op::Bin(BinOp::Add),
-            vec![t_lo_64, t_hi_shl_27],
-            sum,
-        )?;
+        let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![t_lo_64, t_hi_shl_27], sum)?;
         let (bld, next) = bld.with_wire(WireTy::Bits(64));
-        let bld = bld.with_instruction(
-            Op::Bin(BinOp::Sub),
-            vec![sum, t_hi_64],
-            next,
-        )?;
+        let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![sum, t_hi_64], next)?;
 
         Ok((bld, next))
     }
@@ -156,9 +160,7 @@ impl PrimeFieldHdl for BabyBear {
         32
     }
 
-    fn alloc_constants(
-        bld: HdlGraphBuilder,
-    ) -> Result<(HdlGraphBuilder, Self::Constants), Error> {
+    fn alloc_constants(bld: HdlGraphBuilder) -> Result<(HdlGraphBuilder, Self::Constants), Error> {
         let (bld, p_32) = bld.with_wire(WireTy::Bits(32));
         let (bld, one_32) = bld.with_wire(WireTy::Bits(32));
         let (bld, zeros_4) = bld.with_wire(WireTy::Bits(4));
@@ -255,16 +257,8 @@ impl PrimeFieldHdl for BabyBear {
         let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![a, b], sum)?;
         let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![sum, c.p_32], sum_lt_p)?;
         let bld = bld.with_instruction(Op::Not, vec![sum_lt_p], sum_ge_p)?;
-        let bld = bld.with_instruction(
-            Op::Bin(BinOp::Sub),
-            vec![sum, c.p_32],
-            sum_minus_p,
-        )?;
-        let bld = bld.with_instruction(
-            Op::Mux,
-            vec![sum_ge_p, sum, sum_minus_p],
-            result,
-        )?;
+        let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![sum, c.p_32], sum_minus_p)?;
+        let bld = bld.with_instruction(Op::Mux, vec![sum_ge_p, sum, sum_minus_p], result)?;
 
         Ok((bld, result))
     }
@@ -284,16 +278,8 @@ impl PrimeFieldHdl for BabyBear {
 
         let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![a, b], diff)?;
         let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![a, b], underflow)?;
-        let bld = bld.with_instruction(
-            Op::Bin(BinOp::Add),
-            vec![diff, c.p_32],
-            diff_plus_p,
-        )?;
-        let bld = bld.with_instruction(
-            Op::Mux,
-            vec![underflow, diff, diff_plus_p],
-            result,
-        )?;
+        let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![diff, c.p_32], diff_plus_p)?;
+        let bld = bld.with_instruction(Op::Mux, vec![underflow, diff, diff_plus_p], result)?;
 
         Ok((bld, result))
     }
@@ -310,58 +296,45 @@ impl PrimeFieldHdl for BabyBear {
         let (bld, a_64) = bld.with_wire(WireTy::Bits(64));
         let (bld, b_64) = bld.with_wire(WireTy::Bits(64));
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 32, high_width: 32 },
+            Op::Concat {
+                low_width: 32,
+                high_width: 32,
+            },
             vec![a, c.zeros_32],
             a_64,
         )?;
         let bld = bld.with_instruction(
-            Op::Concat { low_width: 32, high_width: 32 },
+            Op::Concat {
+                low_width: 32,
+                high_width: 32,
+            },
             vec![b, c.zeros_32],
             b_64,
         )?;
         let (bld, prod_64) = bld.with_wire(WireTy::Bits(64));
-        let bld = bld.with_instruction(
-            Op::Bin(BinOp::Mul),
-            vec![a_64, b_64],
-            prod_64,
-        )?;
+        let bld = bld.with_instruction(Op::Bin(BinOp::Mul), vec![a_64, b_64], prod_64)?;
 
         // Cascaded Solinas reduction: twelve passes bring any
         // 62-bit product below 2p.
-        let (bld, reduced_64) = (0..REDUCTION_PASSES).try_fold(
-            (bld, prod_64),
-            |(bld, cur), _| Self::solinas_pass(bld, cur, c),
-        )?;
+        let (bld, reduced_64) = (0..REDUCTION_PASSES)
+            .try_fold((bld, prod_64), |(bld, cur), _| {
+                Self::solinas_pass(bld, cur, c)
+            })?;
 
         // Truncate to 32 bits and apply a single conditional subtraction of p.
         let (bld, reduced_32) = bld.with_wire(WireTy::Bits(32));
-        let bld = bld.with_instruction(
-            Op::Slice { lo: 0, hi: 32 },
-            vec![reduced_64],
-            reduced_32,
-        )?;
+        let bld =
+            bld.with_instruction(Op::Slice { lo: 0, hi: 32 }, vec![reduced_64], reduced_32)?;
 
         let (bld, r_lt_p) = bld.with_wire(WireTy::Bit);
         let (bld, r_ge_p) = bld.with_wire(WireTy::Bit);
         let (bld, r_minus_p) = bld.with_wire(WireTy::Bits(32));
         let (bld, result) = bld.with_wire(WireTy::Bits(32));
 
-        let bld = bld.with_instruction(
-            Op::Bin(BinOp::Lt),
-            vec![reduced_32, c.p_32],
-            r_lt_p,
-        )?;
+        let bld = bld.with_instruction(Op::Bin(BinOp::Lt), vec![reduced_32, c.p_32], r_lt_p)?;
         let bld = bld.with_instruction(Op::Not, vec![r_lt_p], r_ge_p)?;
-        let bld = bld.with_instruction(
-            Op::Bin(BinOp::Sub),
-            vec![reduced_32, c.p_32],
-            r_minus_p,
-        )?;
-        let bld = bld.with_instruction(
-            Op::Mux,
-            vec![r_ge_p, reduced_32, r_minus_p],
-            result,
-        )?;
+        let bld = bld.with_instruction(Op::Bin(BinOp::Sub), vec![reduced_32, c.p_32], r_minus_p)?;
+        let bld = bld.with_instruction(Op::Mux, vec![r_ge_p, reduced_32, r_minus_p], result)?;
 
         Ok((bld, result))
     }
@@ -379,17 +352,14 @@ impl PrimeFieldHdl for BabyBear {
             .then_some(())
             .ok_or_else(|| hdl_cat_error::Error::WidthMismatch {
                 expected: hdl_cat_error::Width::new(32),
-                actual: hdl_cat_error::Width::new(
-                    u32::try_from(seq.len()).unwrap_or(u32::MAX),
-                ),
+                actual: hdl_cat_error::Width::new(u32::try_from(seq.len()).unwrap_or(u32::MAX)),
             })?;
-        Ok((0..seq.len().min(32)).fold(0u64, |acc, i| {
-            if seq.bit(i) {
-                acc | (1u64 << i)
-            } else {
-                acc
-            }
-        }))
+        Ok((0..seq.len().min(32)).fold(
+            0u64,
+            |acc, i| {
+                if seq.bit(i) { acc | (1u64 << i) } else { acc }
+            },
+        ))
     }
 
     fn one_wire(c: &Self::Constants) -> WireId {
@@ -403,7 +373,7 @@ impl PrimeFieldHdl for BabyBear {
 
 #[cfg(test)]
 mod tests {
-    use super::{BabyBear, BABYBEAR_PRIME_U64};
+    use super::{BABYBEAR_PRIME_U64, BabyBear};
     use crate::hdl::field_hdl::PrimeFieldHdl;
     use hdl_cat_error::Error;
     use hdl_cat_ir::{HdlGraphBuilder, WireTy};
@@ -416,10 +386,7 @@ mod tests {
             hdl_cat_ir::WireId,
             hdl_cat_ir::WireId,
             &super::BabyBearConstants,
-        ) -> Result<
-            (HdlGraphBuilder, hdl_cat_ir::WireId),
-            Error,
-        >,
+        ) -> Result<(HdlGraphBuilder, hdl_cat_ir::WireId), Error>,
     {
         let (bld, a_wire) = HdlGraphBuilder::new().with_wire(WireTy::Bits(32));
         let (bld, b_wire) = bld.with_wire(WireTy::Bits(32));
@@ -492,10 +459,8 @@ mod tests {
             (0x1234_5678, 0x0abc_def0 & 0x7fff_ffff),
         ];
         cases.iter().try_for_each(|&(a, b)| -> Result<(), Error> {
-            let expected = u64::try_from(
-                (u128::from(a) * u128::from(b)) % u128::from(p),
-            )
-            .unwrap_or(0);
+            let expected =
+                u64::try_from((u128::from(a) * u128::from(b)) % u128::from(p)).unwrap_or(0);
             let actual = run_binop(a, b, BabyBear::inline_mul_reduce)?;
             assert_eq!(actual, expected, "mul_reduce({a}, {b})");
             Ok(())

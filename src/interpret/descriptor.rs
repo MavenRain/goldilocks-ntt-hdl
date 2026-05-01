@@ -70,9 +70,7 @@ impl SdfStageDescriptor {
             (Self::Composed(a), b) => {
                 Self::Composed(a.into_iter().chain(std::iter::once(b)).collect())
             }
-            (a, Self::Composed(b)) => {
-                Self::Composed(std::iter::once(a).chain(b).collect())
-            }
+            (a, Self::Composed(b)) => Self::Composed(std::iter::once(a).chain(b).collect()),
             (a, b) => Self::Composed(vec![a, b]),
         }
     }
@@ -103,10 +101,7 @@ mod tests {
 
     #[test]
     fn identity_is_neutral_element() {
-        let stage = SdfStageDescriptor::single(
-            StageIndex::new(0),
-            GoldilocksElement::ONE,
-        );
+        let stage = SdfStageDescriptor::single(StageIndex::new(0), GoldilocksElement::ONE);
         let composed_left = SdfStageDescriptor::identity().compose(stage.clone());
         let composed_right = stage.clone().compose(SdfStageDescriptor::identity());
         assert_eq!(composed_left, stage);

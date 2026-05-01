@@ -30,10 +30,7 @@ impl SimConfig {
     /// # Errors
     ///
     /// Returns an error if `num_stages > 24`.
-    pub fn new(
-        input: Vec<GoldilocksElement>,
-        num_stages: usize,
-    ) -> Result<Self, Error> {
+    pub fn new(input: Vec<GoldilocksElement>, num_stages: usize) -> Result<Self, Error> {
         if num_stages > NTT_STAGES {
             Err(Error::Field(format!(
                 "num_stages {num_stages} exceeds maximum {NTT_STAGES}"
@@ -96,8 +93,8 @@ fn stage_depths(num_stages: usize) -> Vec<usize> {
 fn step_roots(num_stages: usize) -> Result<Vec<GoldilocksElement>, Error> {
     (0..num_stages)
         .map(|j| {
-            let order_bits = u32::try_from(num_stages - j)
-                .map_err(|e| Error::Field(e.to_string()))?;
+            let order_bits =
+                u32::try_from(num_stages - j).map_err(|e| Error::Field(e.to_string()))?;
             primitive_root_of_unity(order_bits)
         })
         .collect()
@@ -107,12 +104,11 @@ fn step_roots(num_stages: usize) -> Result<Vec<GoldilocksElement>, Error> {
 ///
 /// Wire layout: `data_in:64 ++ valid_in:1 ++ step_root_0:64 ++ ... ++ step_root_{N-1}:64`.
 fn pack_input(data: GoldilocksElement, roots: &[GoldilocksElement]) -> BitSeq {
-    let base = u64_to_bitseq(data.value())
-        .concat(BitSeq::from_vec(vec![true]));
+    let base = u64_to_bitseq(data.value()).concat(BitSeq::from_vec(vec![true]));
 
-    roots.iter().fold(base, |acc, root| {
-        acc.concat(u64_to_bitseq(root.value()))
-    })
+    roots
+        .iter()
+        .fold(base, |acc, root| acc.concat(u64_to_bitseq(root.value())))
 }
 
 /// Extract `(data, valid)` from a pipeline output [`BitSeq`].
@@ -143,15 +139,20 @@ fn run_hdl_cat_sim(config: &SimConfig) -> Result<Vec<GoldilocksElement>, Error> 
     let pipeline = compose_pipeline(&depths)
         .map_err(|e| Error::Field(format!("pipeline construction failed: {e}")))?;
 
-    let inputs: Vec<BitSeq> = config.input.iter()
+    let inputs: Vec<BitSeq> = config
+        .input
+        .iter()
         .map(|elem| pack_input(*elem, &roots))
         .collect();
 
     let testbench = Testbench::new(pipeline);
-    let outputs = testbench.run(inputs).run()
+    let outputs = testbench
+        .run(inputs)
+        .run()
         .map_err(|e| Error::Field(format!("HDL simulation failed: {e}")))?;
 
-    outputs.iter()
+    outputs
+        .iter()
         .map(|sample| {
             let (data, valid) = unpack_output(sample.value())?;
             if valid {
@@ -178,15 +179,18 @@ mod tests {
         let config = SimConfig::new(input.clone(), 0)?;
         let result = simulate_pipeline(config).run()?;
         assert_eq!(result.len(), input.len());
-        input.iter().zip(result.iter()).try_for_each(|(expected, actual)| {
-            if expected == actual {
-                Ok(())
-            } else {
-                Err(Error::Field(format!(
-                    "passthrough mismatch: expected {expected}, got {actual}"
-                )))
-            }
-        })
+        input
+            .iter()
+            .zip(result.iter())
+            .try_for_each(|(expected, actual)| {
+                if expected == actual {
+                    Ok(())
+                } else {
+                    Err(Error::Field(format!(
+                        "passthrough mismatch: expected {expected}, got {actual}"
+                    )))
+                }
+            })
     }
 
     #[test]
@@ -211,9 +215,7 @@ mod tests {
 
     #[test]
     fn hdl_cat_size_16_simulation_works() -> Result<(), Error> {
-        let input: Vec<GoldilocksElement> = (1..=16)
-            .map(GoldilocksElement::new)
-            .collect();
+        let input: Vec<GoldilocksElement> = (1..=16).map(GoldilocksElement::new).collect();
 
         let config = SimConfig::new(input, 4)?;
         let result = simulate_pipeline(config).run()?;

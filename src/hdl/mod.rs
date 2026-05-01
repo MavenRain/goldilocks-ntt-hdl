@@ -24,15 +24,15 @@ pub mod stage;
 
 // Re-export key types and functions
 pub use arithmetic::{
-    goldilocks_add_comb, goldilocks_sub_comb, goldilocks_mul_comb,
-    GoldilocksAddArrow, GoldilocksSubArrow, GoldilocksMulArrow,
+    GoldilocksAddArrow, GoldilocksMulArrow, GoldilocksSubArrow, goldilocks_add_comb,
+    goldilocks_mul_comb, goldilocks_sub_comb,
 };
-pub use babybear_field_hdl::{BabyBear, BabyBearConstants, BABYBEAR_PRIME_U64};
-pub use butterfly::{dif_butterfly, DifButterflySync, BUTTERFLY_LATENCY};
-pub use common::{GoldilocksElement, GOLDILOCKS_PRIME_U64, u64_to_bitseq, bitseq_to_u64};
+pub use babybear_field_hdl::{BABYBEAR_PRIME_U64, BabyBear, BabyBearConstants};
+pub use butterfly::{BUTTERFLY_LATENCY, DifButterflySync, dif_butterfly};
+pub use common::{GOLDILOCKS_PRIME_U64, GoldilocksElement, bitseq_to_u64, u64_to_bitseq};
 pub use delay::delay_n;
-pub use goldilocks_reduce::{goldilocks_reduce_arrow, goldilocks_mul_reduce_arrow};
-pub use pipeline::{size_4_pipeline, emit_size_4_pipeline_verilog};
-pub use stage::{sdf_stage, sdf_stage_depth_1, sdf_stage_depth_2};
 pub use field_hdl::PrimeFieldHdl;
 pub use goldilocks_field_hdl::{Goldilocks, GoldilocksConstants};
+pub use goldilocks_reduce::{goldilocks_mul_reduce_arrow, goldilocks_reduce_arrow};
+pub use pipeline::{emit_size_4_pipeline_verilog, size_4_pipeline};
+pub use stage::{emit_sdf_stage_circom, sdf_stage, sdf_stage_depth_1, sdf_stage_depth_2};

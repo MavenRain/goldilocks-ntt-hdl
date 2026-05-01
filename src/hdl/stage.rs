@@ -25,6 +25,7 @@
 //! [`sdf_stage`], which delegates to [`sdf_stage_generic`] with the
 //! [`Goldilocks`] marker type.
 
+use comp_cat_rs::effect::io::Io;
 use hdl_cat_bits::Bits;
 use hdl_cat_circuit::{CircuitTensor, Obj};
 use hdl_cat_error::Error;
@@ -43,10 +44,8 @@ pub const COUNTER_BITS: usize = 24;
 pub type GoldilocksElement = Bits<64>;
 
 /// Input bundle for an SDF stage: `((data, valid), step_root)`.
-pub type SdfStageInput = CircuitTensor<
-    CircuitTensor<Obj<GoldilocksElement>, Obj<bool>>,
-    Obj<GoldilocksElement>,
->;
+pub type SdfStageInput =
+    CircuitTensor<CircuitTensor<Obj<GoldilocksElement>, Obj<bool>>, Obj<GoldilocksElement>>;
 
 /// Output bundle for an SDF stage: `(data, valid)`.
 pub type SdfStageOutput = CircuitTensor<Obj<GoldilocksElement>, Obj<bool>>;
@@ -65,9 +64,7 @@ pub type SdfStageSync = Sync<SdfStageState, SdfStageInput, SdfStageOutput>;
 
 /// Create a [`COUNTER_BITS`]-wide [`BitSeq`] from a `u32`.
 fn counter_to_bitseq(val: u32) -> BitSeq {
-    BitSeq::from_vec(
-        (0..COUNTER_BITS).map(|i| (val >> i) & 1 == 1).collect(),
-    )
+    BitSeq::from_vec((0..COUNTER_BITS).map(|i| (val >> i) & 1 == 1).collect())
 }
 
 // ── SDF stage constructor ────────────────────────────────────────────
@@ -106,7 +103,10 @@ pub fn sdf_stage_generic<F: PrimeFieldHdl>(depth: usize) -> Result<SdfStageSync,
 
     // ── Source wire allocation ────────────────────────────────────────
     // State wires: delay_arr (Array), twiddle, counter
-    let delay_ty = WireTy::Array { element_width: elem_width, depth };
+    let delay_ty = WireTy::Array {
+        element_width: elem_width,
+        depth,
+    };
     let (bld, delay_arr) = HdlGraphBuilder::new().with_wire(delay_ty.clone());
 
     let (bld, twiddle) = bld.with_wire(elem_ty.clone());
@@ -134,20 +134,36 @@ pub fn sdf_stage_generic<F: PrimeFieldHdl>(depth: usize) -> Result<SdfStageSync,
     let (bld, zero_ctr) = bld.with_wire(WireTy::Bits(counter_bits));
 
     let bld = bld.with_instruction(
-        Op::Const { bits: counter_to_bitseq(depth_u32), ty: WireTy::Bits(counter_bits) },
-        vec![], depth_const,
+        Op::Const {
+            bits: counter_to_bitseq(depth_u32),
+            ty: WireTy::Bits(counter_bits),
+        },
+        vec![],
+        depth_const,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: counter_to_bitseq(max_counter_u32), ty: WireTy::Bits(counter_bits) },
-        vec![], max_counter_const,
+        Op::Const {
+            bits: counter_to_bitseq(max_counter_u32),
+            ty: WireTy::Bits(counter_bits),
+        },
+        vec![],
+        max_counter_const,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: counter_to_bitseq(1), ty: WireTy::Bits(counter_bits) },
-        vec![], one_ctr,
+        Op::Const {
+            bits: counter_to_bitseq(1),
+            ty: WireTy::Bits(counter_bits),
+        },
+        vec![],
+        one_ctr,
     )?;
     let bld = bld.with_instruction(
-        Op::Const { bits: counter_to_bitseq(0), ty: WireTy::Bits(counter_bits) },
-        vec![], zero_ctr,
+        Op::Const {
+            bits: counter_to_bitseq(0),
+            ty: WireTy::Bits(counter_bits),
+        },
+        vec![],
+        zero_ctr,
     )?;
 
     // ── Phase logic ──────────────────────────────────────────────────
@@ -156,14 +172,19 @@ pub fn sdf_stage_generic<F: PrimeFieldHdl>(depth: usize) -> Result<SdfStageSync,
     let (bld, phase) = bld.with_wire(WireTy::Bit);
 
     let bld = bld.with_instruction(
-        Op::Bin(BinOp::Lt), vec![counter, depth_const], counter_lt_depth,
+        Op::Bin(BinOp::Lt),
+        vec![counter, depth_const],
+        counter_lt_depth,
     )?;
     let bld = bld.with_instruction(Op::Not, vec![counter_lt_depth], phase)?;
 
     // ── Read delayed value (tail of array) ────────────────────────────
     let (bld, delayed) = bld.with_wire(elem_ty.clone());
     let bld = bld.with_instruction(
-        Op::ArrayTail { element_width: elem_width, depth },
+        Op::ArrayTail {
+            element_width: elem_width,
+            depth,
+        },
         vec![delay_arr],
         delayed,
     )?;
@@ -180,26 +201,22 @@ pub fn sdf_stage_generic<F: PrimeFieldHdl>(depth: usize) -> Result<SdfStageSync,
     // data_out: fill -> delayed (R2SDF: drain previous upper from delay),
     //           butterfly -> lower
     let (bld, data_out) = bld.with_wire(elem_ty.clone());
-    let bld = bld.with_instruction(
-        Op::Mux, vec![phase, delayed, lower], data_out,
-    )?;
+    let bld = bld.with_instruction(Op::Mux, vec![phase, delayed, lower], data_out)?;
 
     // valid_out: identity copy
     let (bld, valid_out) = bld.with_wire(WireTy::Bit);
-    let bld = bld.with_instruction(
-        Op::Slice { lo: 0, hi: 1 }, vec![valid_in], valid_out,
-    )?;
+    let bld = bld.with_instruction(Op::Slice { lo: 0, hi: 1 }, vec![valid_in], valid_out)?;
 
     // delay_in: fill -> data_in, butterfly -> upper
     let (bld, delay_in) = bld.with_wire(elem_ty.clone());
-    let bld = bld.with_instruction(
-        Op::Mux, vec![phase, data_in, upper], delay_in,
-    )?;
+    let bld = bld.with_instruction(Op::Mux, vec![phase, data_in, upper], delay_in)?;
 
     // next_twiddle: fill -> 1, butterfly -> twiddle * step_root
     let (bld, next_twiddle) = bld.with_wire(elem_ty);
     let bld = bld.with_instruction(
-        Op::Mux, vec![phase, F::one_wire(&arith), twiddle_stepped], next_twiddle,
+        Op::Mux,
+        vec![phase, F::one_wire(&arith), twiddle_stepped],
+        next_twiddle,
     )?;
 
     // ── Counter logic ────────────────────────────────────────────────
@@ -207,21 +224,26 @@ pub fn sdf_stage_generic<F: PrimeFieldHdl>(depth: usize) -> Result<SdfStageSync,
     let (bld, counter_at_max) = bld.with_wire(WireTy::Bit);
     let (bld, next_counter) = bld.with_wire(WireTy::Bits(counter_bits));
 
+    let bld = bld.with_instruction(Op::Bin(BinOp::Add), vec![counter, one_ctr], counter_inc)?;
     let bld = bld.with_instruction(
-        Op::Bin(BinOp::Add), vec![counter, one_ctr], counter_inc,
-    )?;
-    let bld = bld.with_instruction(
-        Op::Bin(BinOp::Eq), vec![counter, max_counter_const], counter_at_max,
+        Op::Bin(BinOp::Eq),
+        vec![counter, max_counter_const],
+        counter_at_max,
     )?;
     // at_max=0 -> counter_inc, at_max=1 -> zero (wrap)
     let bld = bld.with_instruction(
-        Op::Mux, vec![counter_at_max, counter_inc, zero_ctr], next_counter,
+        Op::Mux,
+        vec![counter_at_max, counter_inc, zero_ctr],
+        next_counter,
     )?;
 
     // ── Delay line: shift in via ArrayShiftIn ──────────────────────────
     let (bld, next_delay_arr) = bld.with_wire(delay_ty);
     let bld = bld.with_instruction(
-        Op::ArrayShiftIn { element_width: elem_width, depth },
+        Op::ArrayShiftIn {
+            element_width: elem_width,
+            depth,
+        },
         vec![delay_arr, delay_in],
         next_delay_arr,
     )?;
@@ -239,25 +261,35 @@ pub fn sdf_stage_generic<F: PrimeFieldHdl>(depth: usize) -> Result<SdfStageSync,
     // Output wires: next_state ++ data_output
     // Next state: [next_delay_arr, next_twiddle, next_counter]
     // Data out:   [data_out, valid_out]
-    let output_wires: Vec<WireId> =
-        [next_delay_arr, next_twiddle, next_counter, data_out, valid_out]
-            .into_iter()
-            .collect();
+    let output_wires: Vec<WireId> = [
+        next_delay_arr,
+        next_twiddle,
+        next_counter,
+        data_out,
+        valid_out,
+    ]
+    .into_iter()
+    .collect();
 
     let state_wire_count = 3; // array + twiddle + counter
 
     // Initial state (compact): delay element = 0, twiddle = 1, counter = 0
     let width = usize::try_from(elem_width).unwrap_or(64);
     let initial_state = BitSeq::from_vec(
-        (0..width).map(|_| false)                    // delay element reset (compact)
-            .chain(core::iter::once(true))           // twiddle bit 0 = 1
-            .chain((1..width).map(|_| false))        // twiddle remaining bits
+        (0..width)
+            .map(|_| false) // delay element reset (compact)
+            .chain(core::iter::once(true)) // twiddle bit 0 = 1
+            .chain((1..width).map(|_| false)) // twiddle remaining bits
             .chain((0..COUNTER_BITS).map(|_| false)) // counter: zero
             .collect(),
     );
 
     Ok(hdl_cat_sync::machine::from_raw(
-        graph, input_wires, output_wires, initial_state, state_wire_count,
+        graph,
+        input_wires,
+        output_wires,
+        initial_state,
+        state_wire_count,
     ))
 }
 
@@ -294,6 +326,49 @@ pub fn sdf_stage_depth_2() -> Result<SdfStageSync, Error> {
 /// Returns [`Error`] if IR construction fails.
 pub fn sdf_stage_depth_1() -> Result<SdfStageSync, Error> {
     sdf_stage(1)
+}
+
+/// Emit an SDF stage as a time-unrolled Circom template.
+///
+/// Constructs an [`sdf_stage`] of the given delay depth and lowers it
+/// through [`hdl_cat_circom::emit_unrolled_template`], producing a flat
+/// combinational template that exposes a per-cycle input bus, a per-cycle
+/// output bus, and the initial state baked into cycle-0 state wires.
+///
+/// The Mealy step (delay-line shift, twiddle accumulation, counter
+/// rollover) is replicated `num_cycles` times in the rendered template,
+/// with cycle-`k+1` state wires driven from cycle-`k`'s next-state wires.
+///
+/// # Arguments
+///
+/// * `depth` - Delay depth for the stage (must be >= 1).
+/// * `num_cycles` - Number of cycles to unroll (must be >= 1).
+/// * `name` - Circom template name.
+///
+/// # Errors
+///
+/// Returns [`Error`] if stage construction fails.  The returned [`Io`]
+/// surfaces emitter errors at run time (currently only `Reg` ops, which
+/// [`sdf_stage`] does not emit).
+pub fn emit_sdf_stage_circom(
+    depth: usize,
+    num_cycles: usize,
+    name: &str,
+) -> Result<Io<Error, String>, Error> {
+    let stage = sdf_stage(depth)?;
+    let (graph, input_wires, output_wires, initial_state, state_wire_count) = stage.into_parts();
+
+    let template = hdl_cat_circom::emit_unrolled_template(
+        &graph,
+        name,
+        &input_wires,
+        &output_wires,
+        state_wire_count,
+        &initial_state,
+        num_cycles,
+    );
+
+    Ok(template.flat_map(|t| t.render()))
 }
 
 /// Software reference for a single DIF butterfly computation.
@@ -338,7 +413,12 @@ mod tests {
 
     impl RefState {
         fn new(depth: usize) -> Self {
-            Self { delay: vec![0; depth], twiddle: 1, counter: 0, depth }
+            Self {
+                delay: vec![0; depth],
+                twiddle: 1,
+                counter: 0,
+                depth,
+            }
         }
 
         fn step(self, data_in: u64, step_root: u64) -> (Self, u64) {
@@ -347,16 +427,12 @@ mod tests {
             let delayed = self.delay[self.depth - 1];
 
             let (data_out, delay_in, next_tw) = if is_butterfly {
-                let upper = u64::try_from(
-                    (u128::from(delayed) + u128::from(data_in)) % p,
-                ).unwrap_or(0);
+                let upper =
+                    u64::try_from((u128::from(delayed) + u128::from(data_in)) % p).unwrap_or(0);
                 let diff = (u128::from(delayed) + p - u128::from(data_in)) % p;
-                let lower = u64::try_from(
-                    (diff * u128::from(self.twiddle)) % p,
-                ).unwrap_or(0);
-                let tw = u64::try_from(
-                    (u128::from(self.twiddle) * u128::from(step_root)) % p,
-                ).unwrap_or(0);
+                let lower = u64::try_from((diff * u128::from(self.twiddle)) % p).unwrap_or(0);
+                let tw = u64::try_from((u128::from(self.twiddle) * u128::from(step_root)) % p)
+                    .unwrap_or(0);
                 (lower, upper, tw)
             } else {
                 // R2SDF fill: output the delay tail, store input
@@ -374,12 +450,15 @@ mod tests {
                 self.counter + 1
             };
 
-            (RefState {
-                delay: next_delay,
-                twiddle: next_tw,
-                counter: next_counter,
-                depth: self.depth,
-            }, data_out)
+            (
+                RefState {
+                    delay: next_delay,
+                    twiddle: next_tw,
+                    counter: next_counter,
+                    depth: self.depth,
+                },
+                data_out,
+            )
         }
     }
 
@@ -439,7 +518,8 @@ mod tests {
         // Feed 4 cycles (2 periods of 2D=2 each)
         let data: Vec<u64> = vec![10, 20, 30, 40];
 
-        let inputs: Vec<BitSeq> = data.iter()
+        let inputs: Vec<BitSeq> = data
+            .iter()
             .map(|d| make_input(*d, true, step_root))
             .collect();
 
@@ -447,24 +527,28 @@ mod tests {
         let results = tb.run(inputs).run()?;
 
         // Compare against software reference
-        let (_, ref_outputs) = data.iter().fold(
-            (RefState::new(1), Vec::new()),
-            |(state, outs), d| {
-                let (next_state, out) = state.step(*d, step_root);
-                (next_state, outs.into_iter().chain(core::iter::once(out)).collect())
-            },
-        );
+        let (_, ref_outputs) =
+            data.iter()
+                .fold((RefState::new(1), Vec::new()), |(state, outs), d| {
+                    let (next_state, out) = state.step(*d, step_root);
+                    (
+                        next_state,
+                        outs.into_iter().chain(core::iter::once(out)).collect(),
+                    )
+                });
 
-        results.iter().zip(ref_outputs.iter()).enumerate().try_for_each(
-            |(i, (sample, expected))| {
+        results
+            .iter()
+            .zip(ref_outputs.iter())
+            .enumerate()
+            .try_for_each(|(i, (sample, expected))| {
                 let (actual, _) = read_output(sample.value())?;
                 assert_eq!(
                     actual, *expected,
                     "cycle {i}: got {actual:#018x}, expected {expected:#018x}",
                 );
                 Ok::<(), Error>(())
-            },
-        )?;
+            })?;
 
         Ok(())
     }
@@ -477,31 +561,36 @@ mod tests {
         // Feed 8 cycles (2 periods of 2D=4 each)
         let data: Vec<u64> = vec![1, 2, 3, 4, 5, 6, 7, 8];
 
-        let inputs: Vec<BitSeq> = data.iter()
+        let inputs: Vec<BitSeq> = data
+            .iter()
             .map(|d| make_input(*d, true, step_root))
             .collect();
 
         let tb = Testbench::new(stage);
         let results = tb.run(inputs).run()?;
 
-        let (_, ref_outputs) = data.iter().fold(
-            (RefState::new(2), Vec::new()),
-            |(state, outs), d| {
-                let (next_state, out) = state.step(*d, step_root);
-                (next_state, outs.into_iter().chain(core::iter::once(out)).collect())
-            },
-        );
+        let (_, ref_outputs) =
+            data.iter()
+                .fold((RefState::new(2), Vec::new()), |(state, outs), d| {
+                    let (next_state, out) = state.step(*d, step_root);
+                    (
+                        next_state,
+                        outs.into_iter().chain(core::iter::once(out)).collect(),
+                    )
+                });
 
-        results.iter().zip(ref_outputs.iter()).enumerate().try_for_each(
-            |(i, (sample, expected))| {
+        results
+            .iter()
+            .zip(ref_outputs.iter())
+            .enumerate()
+            .try_for_each(|(i, (sample, expected))| {
                 let (actual, _) = read_output(sample.value())?;
                 assert_eq!(
                     actual, *expected,
                     "cycle {i}: got {actual:#018x}, expected {expected:#018x}",
                 );
                 Ok::<(), Error>(())
-            },
-        )?;
+            })?;
 
         Ok(())
     }
@@ -513,31 +602,36 @@ mod tests {
 
         let data: Vec<u64> = vec![100, 200, 300, 400];
 
-        let inputs: Vec<BitSeq> = data.iter()
+        let inputs: Vec<BitSeq> = data
+            .iter()
             .map(|d| make_input(*d, true, step_root))
             .collect();
 
         let tb = Testbench::new(stage);
         let results = tb.run(inputs).run()?;
 
-        let (_, ref_outputs) = data.iter().fold(
-            (RefState::new(2), Vec::new()),
-            |(state, outs), d| {
-                let (next_state, out) = state.step(*d, step_root);
-                (next_state, outs.into_iter().chain(core::iter::once(out)).collect())
-            },
-        );
+        let (_, ref_outputs) =
+            data.iter()
+                .fold((RefState::new(2), Vec::new()), |(state, outs), d| {
+                    let (next_state, out) = state.step(*d, step_root);
+                    (
+                        next_state,
+                        outs.into_iter().chain(core::iter::once(out)).collect(),
+                    )
+                });
 
-        results.iter().zip(ref_outputs.iter()).enumerate().try_for_each(
-            |(i, (sample, expected))| {
+        results
+            .iter()
+            .zip(ref_outputs.iter())
+            .enumerate()
+            .try_for_each(|(i, (sample, expected))| {
                 let (actual, _) = read_output(sample.value())?;
                 assert_eq!(
                     actual, *expected,
                     "cycle {i}: got {actual:#018x}, expected {expected:#018x}",
                 );
                 Ok::<(), Error>(())
-            },
-        )?;
+            })?;
 
         Ok(())
     }
